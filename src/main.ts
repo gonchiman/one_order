@@ -3,6 +3,7 @@ import { createGame } from './game/createGame';
 import { applyAction, createBoard } from './core/board';
 import type { BoardAction, BoardState, Cell, UnitEvent } from './core/board';
 import { unitLabel } from './core/labels';
+import { createAppShell } from './ui/appShell';
 import {
   actOnSession,
   createSession,
@@ -14,8 +15,9 @@ import {
 
 const app = document.querySelector<HTMLElement>('#app');
 if (app === null) throw new Error('画面の配置先がありません。');
-app.innerHTML = `
-  <header><h1>ONE ORDER / 実験盤</h1></header>
+const shell = createAppShell(app);
+shell.content.innerHTML = `
+  <h1>実験盤</h1>
   <nav class="toolbar" aria-label="実験の操作">
     <button type="button" id="edit-mode" aria-pressed="true">配置編集</button>
     <button type="button" id="run-mode" aria-pressed="false">実験</button>
@@ -335,6 +337,6 @@ if (import.meta.hot) {
   import.meta.hot.accept();
   import.meta.hot.dispose(() => {
     boardGame?.destroy();
-    app.replaceChildren();
+    shell.destroy();
   });
 }

@@ -69,6 +69,8 @@ X・Yの数値入力と操作ボタンでも、盤面上の操作と同じこと
 src/
   main.ts                   # 画面の操作と実験状態の接続
   style.css                 # ページ全体のレイアウト
+  ui/
+    appShell.ts             # 共通ヘッダーとページ用サイドバー
   core/
     board.ts                # 盤面・指示・同時移動のルール
     board.test.ts           # ルールと境界条件のテスト
