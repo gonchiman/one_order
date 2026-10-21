@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import type { BoardState, Cell } from '../../core/board';
 import { unitLabel } from '../../core/labels';
+import { UNIT_TYPES } from '../../core/unitTypes';
 
 export interface BoardView {
   board: BoardState;
@@ -166,12 +167,17 @@ export class BoardScene extends Phaser.Scene {
       graphics.fillCircle(centerX, centerY, radius);
       graphics.lineStyle(1, 0x222222, 1);
       graphics.strokeCircle(centerX, centerY, radius);
-      const fontSize = Math.max(11, Math.min(18, cellSize * 0.25));
-      this.text(centerX, centerY, unitLabel(unit.id), fontSize, isSelected ? '#ffffff' : '#111111');
+      const label = `${unitLabel(unit.id)}${UNIT_TYPES[unit.type].mark}`;
+      const fontSize = Math.max(11, Math.min(16, cellSize * 0.22));
+      const text = this.text(centerX, centerY, label, fontSize, isSelected ? '#ffffff' : '#111111');
+      // 小さいマスや長い識別名でも、ラベルを隣のユニットへ重ねない。
+      const availableLabelWidth = Math.max(1, Math.min(cellSize - 4, radius * 2 - 4));
+      if (text.width > availableLabelWidth) text.setScale(availableLabelWidth / text.width);
     }
 
-    const selectedDescription = selected === undefined ? '選択なし' : `選択中の駒 ${unitLabel(selected.id)}`;
-    this.game.canvas.setAttribute('aria-label', `${board.width}列${board.height}行の盤面、駒${board.units.length}体、ターン${board.turn}、${selectedDescription}`);
+    const selectedDescription = selected === undefined ? '選択なし'
+      : `選択中のユニット ${unitLabel(selected.id)} ${UNIT_TYPES[selected.type].name}、移動力${selected.moveDistance}マス`;
+    this.game.canvas.setAttribute('aria-label', `${board.width}列${board.height}行の盤面、ユニット${board.units.length}体、ターン${board.turn}、${selectedDescription}`);
     this.game.canvas.style.cursor = this.view.targeting ? 'crosshair' : 'default';
   }
 }

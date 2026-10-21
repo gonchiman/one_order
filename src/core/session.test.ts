@@ -26,12 +26,12 @@ function freeze<T>(value: T): T {
 }
 
 function withDestinations(): BoardState {
-  const board = createBoard(5, 5, { orderLimit: 1, moveDistance: 1 });
+  const board = createBoard(5, 5, { orderLimit: 1 });
   return {
     ...board,
     units: [
-      { id: 1, position: { x: 0, y: 4 }, destination: { x: 0, y: 0 } },
-      { id: 2, position: { x: 4, y: 4 }, destination: { x: 4, y: 0 } },
+      { id: 1, type: 'infantry', moveDistance: 1, position: { x: 0, y: 4 }, destination: { x: 0, y: 0 } },
+      { id: 2, type: 'archer', moveDistance: 1, position: { x: 4, y: 4 }, destination: { x: 4, y: 0 } },
     ],
   };
 }
@@ -47,11 +47,13 @@ describe('実験の開始配置', () => {
 
     board.units[0]!.position.x = 3;
     board.units[0]!.destination!.y = 2;
-    board.rules.moveDistance = 3;
+    board.units[0]!.type = 'cavalry';
+    board.units[0]!.moveDistance = 3;
     board.orderedUnitIds.push(2);
     expect(session.initialBoard.units[0]?.position).toEqual({ x: 0, y: 4 });
     expect(session.initialBoard.units[0]?.destination).toEqual({ x: 0, y: 0 });
-    expect(session.initialBoard.rules.moveDistance).toBe(1);
+    expect(session.initialBoard.units[0]?.type).toBe('infantry');
+    expect(session.initialBoard.units[0]?.moveDistance).toBe(1);
     expect(session.initialBoard.orderedUnitIds).toEqual([]);
 
     session.board.units[0]!.position.x = 2;
@@ -112,14 +114,15 @@ describe('実験の開始配置', () => {
     expect(alternativeTurn.board.units[1]?.position).toEqual({ x: 3, y: 4 });
 
     reset.board.units[0]!.destination!.x = 3;
-    reset.board.rules.moveDistance = 4;
+    reset.board.units[0]!.type = 'cavalry';
+    reset.board.units[0]!.moveDistance = 4;
     reset.board.orderedUnitIds.push(2);
     expect(resetExperiment(reset).board).toEqual(initial.board);
   });
 });
 
 describe('ターンを戻す', () => {
-  it('位置・目的地・ターン数・指示済みの駒をそのターンの直前へ復元する', () => {
+  it('位置・目的地・ターン数・指示済みのユニットをそのターンの直前へ復元する', () => {
     const started = startExperiment(createSession(withDestinations()));
     const ordered = act(started, { type: 'order', unitId: 1, destination: { x: 2, y: 4 } });
     const advanced = act(ordered, { type: 'advance' });
@@ -164,11 +167,13 @@ describe('ターンを戻す', () => {
     const restored = undoTurn(advanced);
     restored.board.units[0]!.position.x = 3;
     restored.board.units[0]!.destination!.y = 2;
-    restored.board.rules.moveDistance = 3;
+    restored.board.units[0]!.type = 'cavalry';
+    restored.board.units[0]!.moveDistance = 3;
     restored.events[0]!.from.x = 3;
     expect(advanced.history[0]?.board.units[0]?.position).toEqual({ x: 0, y: 4 });
     expect(advanced.history[0]?.board.units[0]?.destination).toEqual({ x: 0, y: 0 });
-    expect(advanced.history[0]?.board.rules.moveDistance).toBe(1);
+    expect(advanced.history[0]?.board.units[0]?.type).toBe('infantry');
+    expect(advanced.history[0]?.board.units[0]?.moveDistance).toBe(1);
     expect(advanced.history[0]?.events[0]?.from).toEqual({ x: 0, y: 4 });
   });
 });
@@ -181,6 +186,9 @@ describe('編集と実験の操作範囲', () => {
       { type: 'add', position: { x: 2, y: 2 } },
       { type: 'move', unitId: 1, position: { x: 2, y: 2 } },
       { type: 'remove', unitId: 1 },
+      { type: 'set-type', unitId: 1, unitType: 'cavalry' },
+      { type: 'set-move-distance', unitId: 1, moveDistance: 3 },
+      { type: 'reset-move-distance', unitId: 1 },
     ];
     for (const action of editActions) {
       const denied = actOnSession(running, action);
@@ -221,5 +229,72 @@ describe('編集と実験の操作範囲', () => {
     expect(editing).toEqual(before);
     expect(ordered.board.orderedUnitIds).toEqual([1]);
     expect(advanced.history[0]?.board).toEqual(ordered.board);
+  });
+});
+
+describe('兵科と個別移動力の保存', () => {
+  function configuredSession(): SandboxSession {
+    let session = createSession(withDestinations());
+    session = act(session, { type: 'set-type', unitId: 1, unitType: 'cavalry' });
+    session = act(session, { type: 'set-move-distance', unitId: 1, moveDistance: 3 });
+    return act(session, { type: 'set-move-distance', unitId: 2, moveDistance: 2 });
+  }
+
+  it('兵科の初期値を変更した個別移動力で実験を開始し、undoでも同じ設定を復元する', () => {
+    const editing = configuredSession();
+    const started = startExperiment(editing);
+    expect(started.initialBoard.units.map(({ type, moveDistance }) => ({ type, moveDistance }))).toEqual([
+      { type: 'cavalry', moveDistance: 3 },
+      { type: 'archer', moveDistance: 2 },
+    ]);
+
+    const advanced = act(started, { type: 'advance' });
+    expect(advanced.board.units.map(({ position }) => position)).toEqual([{ x: 0, y: 1 }, { x: 4, y: 2 }]);
+    const restored = undoTurn(advanced);
+    expect(restored.board).toEqual(started.board);
+    expect(act(restored, { type: 'advance' }).board).toEqual(advanced.board);
+
+    editing.board.units[0]!.moveDistance = 6;
+    expect(started.initialBoard.units[0]?.moveDistance).toBe(3);
+    expect(advanced.history[0]?.board.units[0]?.moveDistance).toBe(3);
+  });
+
+  it('編集へ戻ると現在の兵科と個別移動力を保持し、開始配置に戻すと元の設定を復元する', () => {
+    const started = startExperiment(configuredSession());
+    const advanced = act(started, { type: 'advance' });
+    const editing = editExperiment(advanced);
+    expect(editing.board.units.map(({ type, moveDistance, destination }) => ({ type, moveDistance, destination }))).toEqual([
+      { type: 'cavalry', moveDistance: 3, destination: null },
+      { type: 'archer', moveDistance: 2, destination: null },
+    ]);
+    const changed = act(editing, { type: 'set-type', unitId: 1, unitType: 'infantry' });
+    expect(changed.board.units[0]?.moveDistance).toBe(1);
+    const reset = resetExperiment(changed);
+    expect(reset.mode).toBe('edit');
+    expect(reset.board).toEqual(started.board);
+    expect(reset.initialBoard).toEqual(started.initialBoard);
+    expect(reset.events).toEqual([]);
+    expect(reset.history).toEqual([]);
+  });
+
+  it('移動力だけの初期値復帰では、選択したユニットの位置・目的地と他のユニットを保持する', () => {
+    const editing = configuredSession();
+    const before = structuredClone(editing);
+    const reset = act(freeze(editing), { type: 'reset-move-distance', unitId: 1 });
+    expect(reset.board.units[0]).toEqual({ ...before.board.units[0], moveDistance: 2 });
+    expect(reset.board.units[1]).toEqual(before.board.units[1]);
+    expect(editing).toEqual(before);
+    expect(reset.initialBoard).toEqual(before.initialBoard);
+    expect(reset.history).toEqual([]);
+  });
+
+  it('無効な個別移動力の変更ではセッションと開始配置を変更しない', () => {
+    const editing = freeze(configuredSession());
+    const result = actOnSession(editing, { type: 'set-move-distance', unitId: 1, moveDistance: 1.5 });
+    expect(result.error).not.toBeNull();
+    expect(result.session).toBe(editing);
+    expect(result.session.history).toEqual([]);
+    expect(result.session.board.units[0]?.moveDistance).toBe(3);
+    expect(result.session.initialBoard.units[0]?.moveDistance).toBe(1);
   });
 });

@@ -3,6 +3,8 @@ import { createGame } from './game/createGame';
 import { applyAction, createBoard } from './core/board';
 import type { BoardAction, BoardState, Cell, UnitEvent } from './core/board';
 import { unitLabel } from './core/labels';
+import { MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_TYPES } from './core/unitTypes';
+import type { UnitType } from './core/unitTypes';
 import { createAppShell } from './ui/appShell';
 import {
   actOnSession,
@@ -16,6 +18,8 @@ import {
 const app = document.querySelector<HTMLElement>('#app');
 if (app === null) throw new Error('画面の配置先がありません。');
 const shell = createAppShell(app);
+const typeOptions = Object.entries(UNIT_TYPES)
+  .map(([value, definition]) => `<option value="${value}">${definition.name}</option>`).join('');
 shell.content.innerHTML = `
   <h1>実験盤</h1>
   <nav class="toolbar" aria-label="実験の操作">
@@ -33,7 +37,7 @@ shell.content.innerHTML = `
       </div>
       <p id="status" role="status" aria-live="polite"></p>
     </section>
-    <aside aria-label="配置と駒の操作">
+    <aside aria-label="配置とユニットの操作">
       <div id="editing-controls">
         <form id="size-form" class="fields">
           <div class="size-fields">
@@ -43,10 +47,16 @@ shell.content.innerHTML = `
           <button type="submit">盤面を作成</button>
         </form>
         <label class="field">操作
-          <select id="edit-tool"><option value="move">駒を移動</option><option value="add">駒を追加</option><option value="remove">駒を削除</option></select>
+          <select id="edit-tool"><option value="move">ユニットを移動</option><option value="add">ユニットを追加</option><option value="remove">ユニットを削除</option></select>
+        </label>
+        <label class="field" id="placement-type-field" hidden>追加する兵科
+          <select id="placement-type">${typeOptions}</select>
         </label>
       </div>
-      <label class="field">選択中の駒 <select id="selected-unit"></select></label>
+      <label class="field">選択中のユニット <select id="selected-unit"></select></label>
+      <label class="field">兵科 <select id="selected-type">${typeOptions}</select></label>
+      <label class="field">移動力 <input id="move-distance" type="number" min="${MIN_MOVE_DISTANCE}" max="${MAX_MOVE_DISTANCE}" step="1" required> マス</label>
+      <button type="button" id="reset-move-distance" class="full-width">移動力を初期値に戻す</button>
       <dl class="unit-details"><dt>現在地</dt><dd id="position"></dd><dt>目的地</dt><dd id="destination"></dd><dt>直前の行動</dt><dd id="last-action"></dd></dl>
       <div id="point-controls" class="fields" hidden>
         <button type="button" id="pick-target" aria-pressed="false">目的地を指定</button>
@@ -57,12 +67,12 @@ shell.content.innerHTML = `
           <label>X <input id="cell-x" type="number" min="1" max="5" step="1" value="2" required></label>
           <label>Y <input id="cell-y" type="number" min="1" max="5" step="1" value="4" required></label>
         </div>
-        <button type="submit" id="apply-coordinate">駒を移動</button>
+        <button type="submit" id="apply-coordinate">ユニットを移動</button>
       </form>
-      <button type="button" id="remove-selected" class="full-width">選択した駒を削除</button>
+      <button type="button" id="remove-selected" class="full-width">選択したユニットを削除</button>
       <hr>
-      <dl class="rules"><dt>指示上限</dt><dd id="order-limit"></dd><dt>移動量</dt><dd id="move-distance"></dd></dl>
-      <table><thead><tr><th scope="col">駒</th><th scope="col">現在地</th><th scope="col">目的地</th></tr></thead><tbody id="unit-rows"></tbody></table>
+      <dl class="rules"><dt>指示上限</dt><dd id="order-limit"></dd></dl>
+      <table><thead><tr><th scope="col">ユニット</th><th scope="col">兵科</th><th scope="col">移動力</th></tr></thead><tbody id="unit-rows"></tbody></table>
     </aside>
   </div>
 `;
@@ -88,7 +98,12 @@ const controls = {
   width: element<HTMLInputElement>('#width'),
   height: element<HTMLInputElement>('#height'),
   tool: element<HTMLSelectElement>('#edit-tool'),
+  placementTypeField: element<HTMLLabelElement>('#placement-type-field'),
+  placementType: element<HTMLSelectElement>('#placement-type'),
   selected: element<HTMLSelectElement>('#selected-unit'),
+  selectedType: element<HTMLSelectElement>('#selected-type'),
+  moveDistance: element<HTMLInputElement>('#move-distance'),
+  resetMoveDistance: element<HTMLButtonElement>('#reset-move-distance'),
   position: element<HTMLElement>('#position'),
   destination: element<HTMLElement>('#destination'),
   lastAction: element<HTMLElement>('#last-action'),
@@ -101,15 +116,16 @@ const controls = {
   apply: element<HTMLButtonElement>('#apply-coordinate'),
   remove: element<HTMLButtonElement>('#remove-selected'),
   orderLimit: element<HTMLElement>('#order-limit'),
-  moveDistance: element<HTMLElement>('#move-distance'),
   rows: element<HTMLTableSectionElement>('#unit-rows'),
 };
 
 function initialBoard(width = 5, height = 5): BoardState {
   let board = createBoard(width, height);
-  const margin = width >= 4 ? 1 : 0;
-  board = applyAction(board, { type: 'move', unitId: 1, position: { x: margin, y: height - 2 } }).state;
-  return applyAction(board, { type: 'move', unitId: 2, position: { x: width - margin - 1, y: height - 2 } }).state;
+  const left = Math.floor((width - 3) / 2);
+  board = applyAction(board, { type: 'move', unitId: 1, position: { x: left, y: height - 2 } }).state;
+  board = applyAction(board, { type: 'move', unitId: 2, position: { x: left + 1, y: height - 2 } }).state;
+  board = applyAction(board, { type: 'set-type', unitId: 2, unitType: 'cavalry' }).state;
+  return applyAction(board, { type: 'add', unitType: 'archer', position: { x: left + 2, y: height - 2 } }).state;
 }
 
 let session = createSession(initialBoard());
@@ -126,7 +142,7 @@ const eventLabels: Record<UnitEvent['reason'], string> = {
   'no-order': '指示なし',
   arrived: '目的地に到着',
   conflict: '移動先が競合して停止',
-  occupied: '他の駒で進めず停止',
+  occupied: '他のユニットで進めず停止',
   cycle: '入れ替え・循環で停止',
 };
 
@@ -154,8 +170,9 @@ function render(): void {
   controls.edit.setAttribute('aria-pressed', String(editing));
   controls.run.setAttribute('aria-pressed', String(!editing));
   controls.turn.value = `ターン ${board.turn}`;
-  controls.orderCount.value = editing ? `駒 ${board.units.length}体` : `指示 ${board.orderedUnitIds.length} / ${board.rules.orderLimit}体`;
+  controls.orderCount.value = editing ? `ユニット ${board.units.length}体` : `指示 ${board.orderedUnitIds.length} / ${board.rules.orderLimit}体`;
   controls.editing.hidden = !editing;
+  controls.placementTypeField.hidden = controls.tool.value !== 'add';
   controls.point.hidden = editing;
   controls.remove.hidden = !editing;
   controls.advance.disabled = editing;
@@ -169,21 +186,26 @@ function render(): void {
   if (controls.selected.options.length !== unitValues.length || unitValues.some((value, index) => controls.selected.options[index]?.value !== value)) {
     controls.selected.replaceChildren();
     for (const item of board.units) controls.selected.add(new Option(unitLabel(item.id), String(item.id)));
-    if (selectedId === null) controls.selected.add(new Option('駒なし', ''));
+    if (selectedId === null) controls.selected.add(new Option('ユニットなし', ''));
   }
   controls.selected.value = selectedId === null ? '' : String(selectedId);
   controls.selected.disabled = unit === undefined;
+  controls.selectedType.value = unit?.type ?? '';
+  controls.selectedType.disabled = !editing || unit === undefined;
+  controls.moveDistance.value = unit === undefined ? '' : String(unit.moveDistance);
+  controls.moveDistance.disabled = !editing || unit === undefined;
+  controls.resetMoveDistance.hidden = !editing;
+  controls.resetMoveDistance.disabled = unit === undefined;
   controls.position.textContent = unit === undefined ? '—' : formatCell(unit.position);
   controls.destination.textContent = unit === undefined ? '—' : formatCell(unit.destination);
   const event = session.events.find((item) => item.unitId === selectedId);
   controls.lastAction.textContent = event === undefined ? '—' : eventLabels[event.reason];
   controls.orderLimit.textContent = `${board.rules.orderLimit}体 / ターン`;
-  controls.moveDistance.textContent = `${board.rules.moveDistance}マス / ターン`;
   controls.x.max = String(board.width);
   controls.y.max = String(board.height);
   controls.x.value = String(cursor.x + 1);
   controls.y.value = String(cursor.y + 1);
-  controls.apply.textContent = editing ? { move: '駒を移動', add: '駒を追加', remove: 'そのマスの駒を削除' }[controls.tool.value] ?? '駒を移動' : '目的地を指示';
+  controls.apply.textContent = editing ? { move: 'ユニットを移動', add: 'ユニットを追加', remove: 'そのマスのユニットを削除' }[controls.tool.value] ?? 'ユニットを移動' : '目的地を指示';
   controls.apply.disabled = unit === undefined && (!editing || controls.tool.value === 'move');
   controls.status.textContent = status;
   controls.status.setAttribute('role', isError ? 'alert' : 'status');
@@ -197,14 +219,14 @@ function render(): void {
       const select = document.createElement('button');
       select.type = 'button';
       select.textContent = unitLabel(item.id);
-      select.setAttribute('aria-label', `駒 ${unitLabel(item.id)} を選択`);
+      select.setAttribute('aria-label', `ユニット ${unitLabel(item.id)} を選択`);
       select.addEventListener('click', () => selectUnit(item.id));
       row.insertCell().append(select);
       row.insertCell(); row.insertCell();
     }
     row.querySelector('button')?.setAttribute('aria-pressed', String(item.id === selectedId));
-    row.cells[1]!.textContent = formatCell(item.position);
-    row.cells[2]!.textContent = formatCell(item.destination);
+    row.cells[1]!.textContent = UNIT_TYPES[item.type].name;
+    row.cells[2]!.textContent = `${item.moveDistance}マス`;
     if (controls.rows.rows[index] !== row) controls.rows.insertBefore(row, controls.rows.rows[index] ?? null);
     rows.delete(item.id);
   });
@@ -230,7 +252,7 @@ function perform(action: BoardAction): boolean {
     setStatus(`${moved}体移動${blocked > 0 ? `・${blocked}体停止` : ''}`);
   } else if (action.type === 'order') {
     targeting = false;
-    setStatus(`駒 ${unitLabel(action.unitId)}：${action.destination === null ? '指示を解除' : `目的地 ${formatCell(action.destination)}`}`);
+    setStatus(`ユニット ${unitLabel(action.unitId)}：${action.destination === null ? '指示を解除' : `目的地 ${formatCell(action.destination)}`}`);
   } else {
     setStatus();
   }
@@ -241,20 +263,20 @@ function perform(action: BoardAction): boolean {
 function applyAt(position: Cell): void {
   cursor = position;
   if (session.mode === 'run') {
-    if (selectedId === null) { setStatus('駒を選んでください。', true); render(); return; }
+    if (selectedId === null) { setStatus('ユニットを選んでください。', true); render(); return; }
     perform({ type: 'order', unitId: selectedId, destination: position });
     return;
   }
   if (controls.tool.value === 'add') {
-    perform({ type: 'add', position });
+    perform({ type: 'add', position, unitType: controls.placementType.value as UnitType });
   } else if (controls.tool.value === 'remove') {
     const occupant = session.board.units.find((unit) => unit.position.x === position.x && unit.position.y === position.y);
-    if (occupant === undefined) { setStatus('そのマスに駒がありません。', true); render(); return; }
+    if (occupant === undefined) { setStatus('そのマスにユニットがありません。', true); render(); return; }
     perform({ type: 'remove', unitId: occupant.id });
   } else if (selectedId !== null) {
     perform({ type: 'move', unitId: selectedId, position });
   } else {
-    setStatus('駒を選んでください。', true); render();
+    setStatus('ユニットを選んでください。', true); render();
   }
 }
 
@@ -302,13 +324,22 @@ function rememberCoordinates(): void {
 controls.x.addEventListener('input', rememberCoordinates);
 controls.y.addEventListener('input', rememberCoordinates);
 controls.selected.addEventListener('change', () => selectUnit(Number(controls.selected.value)));
+controls.selectedType.addEventListener('change', () => {
+  if (selectedId !== null) perform({ type: 'set-type', unitId: selectedId, unitType: controls.selectedType.value as UnitType });
+});
+controls.moveDistance.addEventListener('change', () => {
+  if (selectedId !== null) perform({ type: 'set-move-distance', unitId: selectedId, moveDistance: controls.moveDistance.valueAsNumber });
+});
+controls.resetMoveDistance.addEventListener('click', () => {
+  if (selectedId !== null) perform({ type: 'reset-move-distance', unitId: selectedId });
+});
 controls.coordinateForm.addEventListener('submit', (event) => {
   event.preventDefault();
   applyAt({ x: controls.x.valueAsNumber - 1, y: controls.y.valueAsNumber - 1 });
 });
 controls.pickTarget.addEventListener('click', () => {
   targeting = !targeting;
-  setStatus(targeting && selectedId !== null ? `駒 ${unitLabel(selectedId)} の目的地を選択` : '');
+  setStatus(targeting && selectedId !== null ? `ユニット ${unitLabel(selectedId)} の目的地を選択` : '');
   render();
 });
 controls.clearOrder.addEventListener('click', () => {
