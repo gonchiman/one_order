@@ -5,14 +5,9 @@ export function createGame(parent: string): Phaser.Game {
   return new Phaser.Game({
     type: Phaser.AUTO,
     parent,
-    width: 960,
-    height: 640,
-    backgroundColor: '#171a1c',
-    pixelArt: true,
-    roundPixels: true,
+    backgroundColor: '#ffffff',
     scale: {
-      mode: Phaser.Scale.FIT,
-      autoCenter: Phaser.Scale.CENTER_BOTH,
+      mode: Phaser.Scale.RESIZE,
     },
     scene: [BootScene],
   });

@@ -1,8 +1,8 @@
 :root {
-  color-scheme: dark;
-  font-family: "Yu Gothic UI", sans-serif;
-  background: #171a1c;
-  color: #eeeee6;
+  color-scheme: light;
+  font-family: sans-serif;
+  background: #ffffff;
+  color: #000000;
 }
 
 * {
@@ -29,7 +29,6 @@ canvas {
 
 noscript {
   position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
+  top: 16px;
+  left: 16px;
 }
