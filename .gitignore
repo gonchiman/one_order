@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.cache/
+.worktrees/
+work/
+outputs/
+*.local
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
