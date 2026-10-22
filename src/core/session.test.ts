@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBoard } from './board';
 import type { BoardAction, BoardState, UnitEvent } from './board';
+import { UNIT_TYPES } from './unitTypes';
 import {
   actOnSession,
   createSession,
@@ -30,8 +31,12 @@ function withDestinations(): BoardState {
   return {
     ...board,
     units: [
-      { id: 1, type: 'infantry', moveDistance: 1, position: { x: 0, y: 4 }, destination: { x: 0, y: 0 } },
-      { id: 2, type: 'archer', moveDistance: 1, position: { x: 4, y: 4 }, destination: { x: 4, y: 0 } },
+      { ...board.units[0]!, position: { x: 0, y: 4 }, destination: { x: 0, y: 0 } },
+      {
+        ...board.units[1]!, type: 'archer', hp: UNIT_TYPES.archer.maxHp,
+        maxHp: UNIT_TYPES.archer.maxHp, attack: UNIT_TYPES.archer.attack, attackRange: UNIT_TYPES.archer.attackRange,
+        position: { x: 4, y: 4 }, destination: { x: 4, y: 0 },
+      },
     ],
   };
 }
@@ -189,6 +194,10 @@ describe('編集と実験の操作範囲', () => {
       { type: 'set-type', unitId: 1, unitType: 'cavalry' },
       { type: 'set-move-distance', unitId: 1, moveDistance: 3 },
       { type: 'reset-move-distance', unitId: 1 },
+      { type: 'set-side', unitId: 1, side: 'enemy' },
+      { type: 'set-combat-stat', unitId: 1, stat: 'maxHp', value: 7 },
+      { type: 'set-combat-stat', unitId: 1, stat: 'attack', value: 3 },
+      { type: 'set-combat-stat', unitId: 1, stat: 'attackRange', value: 2 },
     ];
     for (const action of editActions) {
       const denied = actOnSession(running, action);
@@ -296,5 +305,125 @@ describe('兵科と個別移動力の保存', () => {
     expect(result.session.history).toEqual([]);
     expect(result.session.board.units[0]?.moveDistance).toBe(3);
     expect(result.session.initialBoard.units[0]?.moveDistance).toBe(1);
+  });
+});
+
+describe('戦闘結果と履歴の保存', () => {
+  function combatSession(): SandboxSession {
+    const board = createBoard(5, 5);
+    return startExperiment(createSession({
+      ...board,
+      units: board.units.map((unit, index) => ({
+        ...unit,
+        side: index === 0 ? 'ally' : 'enemy',
+        position: { x: 2, y: index + 2 },
+      })),
+    }));
+  }
+
+  it('編集した陣営と戦闘能力を開始設定として独立して保存する', () => {
+    let editing = createSession();
+    editing = act(editing, { type: 'set-side', unitId: 2, side: 'enemy' });
+    editing = act(editing, { type: 'set-combat-stat', unitId: 2, stat: 'maxHp', value: 7 });
+    editing = act(editing, { type: 'set-combat-stat', unitId: 2, stat: 'attack', value: 3 });
+    editing = act(editing, { type: 'set-combat-stat', unitId: 2, stat: 'attackRange', value: 2 });
+    const started = startExperiment(editing);
+    expect(started.initialBoard.units[1]).toMatchObject({ side: 'enemy', hp: 7, maxHp: 7, attack: 3, attackRange: 2 });
+    expect(started.combatEvents).toEqual([]);
+
+    editing.board.units[1]!.side = 'ally';
+    editing.board.units[1]!.hp = 1;
+    editing.board.units[1]!.attack = 9;
+    expect(started.initialBoard.units[1]).toMatchObject({ side: 'enemy', hp: 7, maxHp: 7, attack: 3, attackRange: 2 });
+    expect(started.board.units[1]).toEqual(started.initialBoard.units[1]);
+  });
+
+  it('指示後も直前の戦闘表示を保持し、undoでHPと前の戦闘表示を復元する', () => {
+    const started = freeze(combatSession());
+    const first = act(started, { type: 'advance' });
+    expect(first.board.units.map((unit) => unit.hp)).toEqual([3, 3]);
+    expect(first.combatEvents).toEqual([
+      { attackerId: 1, targetId: 2, damage: 2, defeated: false },
+      { attackerId: 2, targetId: 1, damage: 2, defeated: false },
+    ]);
+    const ordered = act(first, { type: 'order', unitId: 1, destination: null });
+    expect(ordered.combatEvents).toEqual(first.combatEvents);
+    const second = act(freeze(ordered), { type: 'advance' });
+    expect(second.board.units.map((unit) => unit.hp)).toEqual([1, 1]);
+    const restored = undoTurn(second);
+    expect(restored.board).toEqual(ordered.board);
+    expect(restored.combatEvents).toEqual(first.combatEvents);
+    expect(restored.history).toHaveLength(1);
+    expect(act(restored, { type: 'advance' }).board).toEqual(second.board);
+    expect(undoTurn(restored).combatEvents).toEqual([]);
+  });
+
+  it('撃破された双方のユニットをundoで復活させ、開始配置へ戻すとHPと履歴を初期化する', () => {
+    const started = combatSession();
+    const first = act(started, { type: 'advance' });
+    const second = act(first, { type: 'advance' });
+    const allyOrdered = act(second, { type: 'order', unitId: 1, destination: null });
+    const ordered = act(allyOrdered, { type: 'order', unitId: 2, destination: null });
+    const defeated = act(freeze(ordered), { type: 'advance' });
+    expect(defeated.board.units).toEqual([]);
+    expect(defeated.combatEvents.every((event) => event.defeated)).toBe(true);
+    expect(defeated.events).toHaveLength(2);
+
+    const restored = undoTurn(defeated);
+    expect(restored.board).toEqual(ordered.board);
+    expect(restored.board.units.map((unit) => unit.hp)).toEqual([1, 1]);
+    expect(restored.board.orderedUnitIds).toEqual([1, 2]);
+    expect(restored.combatEvents).toEqual(second.combatEvents);
+
+    const reset = resetExperiment(freeze(defeated));
+    expect(reset.mode).toBe('run');
+    expect(reset.board).toEqual(started.board);
+    expect(reset.board.units.map((unit) => unit.hp)).toEqual([5, 5]);
+    expect(reset.combatEvents).toEqual([]);
+    expect(reset.events).toEqual([]);
+    expect(reset.history).toEqual([]);
+  });
+
+  it('履歴・復元結果・開始配置のHPや戦闘表示を独立して保持する', () => {
+    const first = act(combatSession(), { type: 'advance' });
+    const second = act(first, { type: 'advance' });
+    first.combatEvents[0]!.damage = 90;
+    expect(second.history[1]?.combatEvents[0]?.damage).toBe(2);
+    expect(second.combatEvents[0]?.damage).toBe(2);
+
+    const restored = undoTurn(second);
+    restored.board.units[0]!.hp = 1;
+    restored.board.units[0]!.side = 'enemy';
+    restored.board.units[0]!.attackRange = 9;
+    restored.combatEvents[0]!.damage = 80;
+    expect(second.history[1]?.board.units[0]).toMatchObject({ hp: 3, side: 'ally', attackRange: 1 });
+    expect(second.history[1]?.combatEvents[0]?.damage).toBe(2);
+    expect(second.initialBoard.units[0]).toMatchObject({ hp: 5, side: 'ally', attackRange: 1 });
+
+    const reset = resetExperiment(second);
+    reset.board.units[0]!.hp = 1;
+    expect(second.initialBoard.units[0]?.hp).toBe(5);
+    expect(resetExperiment(reset).board.units[0]?.hp).toBe(5);
+  });
+
+  it('編集へ戻ると生存中のHPと能力を保持して戦闘表示を消し、再開も空の履歴から始める', () => {
+    const first = act(combatSession(), { type: 'advance' });
+    const editing = editExperiment(freeze(first));
+    expect(editing.board.units.map((unit) => unit.hp)).toEqual([3, 3]);
+    expect(editing.board.units[1]).toMatchObject({ side: 'enemy', maxHp: 5, attack: 2, attackRange: 1 });
+    expect(editing.combatEvents).toEqual([]);
+    expect(editing.events).toEqual([]);
+    expect(editing.history).toEqual([]);
+    const restarted = startExperiment(first);
+    expect(restarted.board.units.map((unit) => unit.hp)).toEqual([3, 3]);
+    expect(restarted.combatEvents).toEqual([]);
+    expect(restarted.history).toEqual([]);
+    expect(restarted.board.turn).toBe(0);
+
+    const withOldLog = { ...editing, combatEvents: structuredClone(first.combatEvents) };
+    const changed = act(withOldLog, { type: 'set-combat-stat', unitId: 1, stat: 'maxHp', value: 8 });
+    expect(changed.board.units[0]?.hp).toBe(8);
+    expect(changed.combatEvents).toEqual([]);
+    expect(changed.initialBoard.units[0]?.hp).toBe(5);
   });
 });

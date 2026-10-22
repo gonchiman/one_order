@@ -5,7 +5,9 @@ import { UNIT_TYPES } from './unitTypes';
 import type { UnitType } from './unitTypes';
 
 function makeUnit(id: number, x: number, y: number, destination: Cell | null = null, moveDistance = 1, type: UnitType = 'infantry'): Unit {
-  return { id, type, moveDistance, position: { x, y }, destination };
+  const preset = UNIT_TYPES[type];
+  return { id, type, side: 'ally', moveDistance, hp: preset.maxHp, maxHp: preset.maxHp,
+    attack: preset.attack, attackRange: preset.attackRange, position: { x, y }, destination };
 }
 
 function scenario(units: Unit[]): BoardState {
@@ -312,10 +314,7 @@ describe('兵科と個別の移動力', () => {
   it.each<UnitType>(['infantry', 'cavalry', 'archer'])('追加する兵科 %s の仮初期値を適用する', (unitType) => {
     const result = applyAction(createBoard(), { type: 'add', position: { x: 2, y: 2 }, unitType });
     expect(result.error).toBeNull();
-    expect(result.state.units.at(-1)).toEqual({
-      id: 3, type: unitType, moveDistance: UNIT_TYPES[unitType].moveDistance,
-      position: { x: 2, y: 2 }, destination: null,
-    });
+    expect(result.state.units.at(-1)).toEqual(makeUnit(3, 2, 2, null, UNIT_TYPES[unitType].moveDistance, unitType));
     expect(result.state.rules).toEqual({ orderLimit: 1 });
   });
 
@@ -326,12 +325,12 @@ describe('兵科と個別の移動力', () => {
     ]));
     const result = applyAction(initial, { type: 'set-type', unitId: 1, unitType: 'cavalry' });
     expect(result.error).toBeNull();
-    expect(result.state.units[0]).toEqual({ ...initial.units[0], type: 'cavalry', moveDistance: 2 });
+    expect(result.state.units[0]).toEqual(makeUnit(1, 0, 0, { x: 5, y: 0 }, 2, 'cavalry'));
     expect(result.state.units[1]).toBe(initial.units[1]);
     expect(initial.units[0]?.moveDistance).toBe(4);
     expect(initial.units[0]?.type).toBe('infantry');
     const archer = applyAction(result.state, { type: 'set-type', unitId: 1, unitType: 'archer' });
-    expect(archer.state.units[0]).toEqual({ ...initial.units[0], type: 'archer', moveDistance: 1 });
+    expect(archer.state.units[0]).toEqual(makeUnit(1, 0, 0, { x: 5, y: 0 }, 1, 'archer'));
   });
 
   it('移動力を個別に変更・初期値へ復帰しても位置・目的地・指示枠を変えない', () => {

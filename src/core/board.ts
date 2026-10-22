@@ -1,5 +1,5 @@
-import { isUnitType, MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_TYPES } from './unitTypes';
-import type { UnitType } from './unitTypes';
+import { COMBAT_STAT_LIMITS, isUnitSide, isUnitType, MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_TYPES } from './unitTypes';
+import type { CombatStat, UnitSide, UnitType } from './unitTypes';
 
 export interface Cell {
   x: number;
@@ -9,7 +9,12 @@ export interface Cell {
 export interface Unit {
   id: number;
   type: UnitType;
+  side: UnitSide;
   moveDistance: number;
+  hp: number;
+  maxHp: number;
+  attack: number;
+  attackRange: number;
   position: Cell;
   destination: Cell | null;
 }
@@ -32,10 +37,12 @@ export interface BoardState {
 }
 
 export type BoardAction =
-  | { type: 'add'; position: Cell; unitType?: UnitType }
+  | { type: 'add'; position: Cell; unitType?: UnitType; side?: UnitSide }
   | { type: 'move'; unitId: number; position: Cell }
   | { type: 'remove'; unitId: number }
   | { type: 'set-type'; unitId: number; unitType: UnitType }
+  | { type: 'set-side'; unitId: number; side: UnitSide }
+  | { type: 'set-combat-stat'; unitId: number; stat: CombatStat; value: number }
   | { type: 'set-move-distance'; unitId: number; moveDistance: number }
   | { type: 'reset-move-distance'; unitId: number }
   | { type: 'order'; unitId: number; destination: Cell | null }
@@ -46,6 +53,14 @@ export interface BoardResult {
   error: string | null;
   blocked: number[];
   events: UnitEvent[];
+  combatEvents: CombatEvent[];
+}
+
+export interface CombatEvent {
+  attackerId: number;
+  targetId: number;
+  damage: number;
+  defeated: boolean;
 }
 
 export interface UnitEvent {
@@ -72,8 +87,8 @@ export function createBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_S
     height,
     turn: 0,
     units: [
-      { id: 1, type: 'infantry', moveDistance: UNIT_TYPES.infantry.moveDistance, position: { x: 0, y: height - 1 }, destination: null },
-      { id: 2, type: 'infantry', moveDistance: UNIT_TYPES.infantry.moveDistance, position: { x: width - 1, y: height - 1 }, destination: null },
+      createUnit(1, 'infantry', 'ally', { x: 0, y: height - 1 }),
+      createUnit(2, 'infantry', 'ally', { x: width - 1, y: height - 1 }),
     ],
     nextId: 3,
     orderedUnitIds: [],
@@ -95,12 +110,49 @@ function cellKey(cell: Cell): string {
   return `${cell.x},${cell.y}`;
 }
 
-function success(state: BoardState, blocked: number[] = [], events: UnitEvent[] = []): BoardResult {
-  return { state, error: null, blocked, events };
+function createUnit(id: number, type: UnitType, side: UnitSide, position: Cell): Unit {
+  const preset = UNIT_TYPES[type];
+  return {
+    id, type, side, moveDistance: preset.moveDistance,
+    hp: preset.maxHp, maxHp: preset.maxHp, attack: preset.attack, attackRange: preset.attackRange,
+    position: { ...position }, destination: null,
+  };
+}
+
+function success(state: BoardState, blocked: number[] = [], events: UnitEvent[] = [], combatEvents: CombatEvent[] = []): BoardResult {
+  return { state, error: null, blocked, events, combatEvents };
 }
 
 function failure(state: BoardState, error: string): BoardResult {
-  return { state, error, blocked: [], events: [] };
+  return { state, error, blocked: [], events: [], combatEvents: [] };
+}
+
+function distance(left: Cell, right: Cell): number {
+  return Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
+}
+
+function resolveCombat(units: Unit[]): { units: Unit[]; events: CombatEvent[] } {
+  const attacks: Omit<CombatEvent, 'defeated'>[] = [];
+  const damageByTarget = new Map<number, number>();
+  // 移動終了時点の全員から攻撃を決め、被害を同時に適用する仮ルール。
+  const living = units.filter((unit) => unit.hp > 0);
+  for (const attacker of living.slice().sort((left, right) => left.id - right.id)) {
+    const target = living.filter((unit) => unit.side !== attacker.side
+      && distance(attacker.position, unit.position) <= attacker.attackRange)
+      .sort((left, right) => distance(attacker.position, left.position) - distance(attacker.position, right.position)
+        || left.id - right.id)[0];
+    if (target === undefined) continue;
+    attacks.push({ attackerId: attacker.id, targetId: target.id, damage: attacker.attack });
+    damageByTarget.set(target.id, (damageByTarget.get(target.id) ?? 0) + attacker.attack);
+  }
+  const defeated = new Set(living.filter((unit) => unit.hp <= (damageByTarget.get(unit.id) ?? 0)).map((unit) => unit.id));
+  return {
+    units: living.filter((unit) => !defeated.has(unit.id)).map((unit) => {
+      const damage = damageByTarget.get(unit.id) ?? 0;
+      return damage === 0 ? unit : { ...unit, hp: Math.max(0, unit.hp - damage) };
+    }),
+    events: attacks.map((attack) => ({ ...attack, defeated: defeated.has(attack.targetId) })),
+  };
 }
 
 function nextPosition(unit: Unit): Cell {
@@ -208,7 +260,8 @@ function advanceTurn(state: BoardState): BoardResult {
   const blocked = events.filter((event) => event.reason === 'conflict' || event.reason === 'occupied'
     || event.reason === 'cycle').map((event) => event.unitId);
 
-  return success({ ...state, units, turn: state.turn + 1, orderedUnitIds: [] }, blocked, events);
+  const combat = resolveCombat(units);
+  return success({ ...state, units: combat.units, turn: state.turn + 1, orderedUnitIds: [] }, blocked, events, combat.events);
 }
 
 export function applyAction(state: BoardState, action: BoardAction): BoardResult {
@@ -216,14 +269,16 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
 
   if (action.type === 'add') {
     const unitType = action.unitType ?? 'infantry';
+    const side = action.side ?? 'ally';
     if (!isUnitType(unitType)) return failure(state, '兵科を選んでください。');
+    if (!isUnitSide(side)) return failure(state, '陣営を選んでください。');
     if (!validCell(state, action.position)) return failure(state, '盤面内のマスを選んでください。');
     if (state.units.some((unit) => sameCell(unit.position, action.position))) {
       return failure(state, 'そのマスにはユニットがあります。');
     }
     return success({
       ...state,
-      units: [...state.units, { id: state.nextId, type: unitType, moveDistance: UNIT_TYPES[unitType].moveDistance, position: { ...action.position }, destination: null }],
+      units: [...state.units, createUnit(state.nextId, unitType, side, action.position)],
       nextId: state.nextId + 1,
     });
   }
@@ -233,11 +288,32 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
 
   if (action.type === 'set-type') {
     if (!isUnitType(action.unitType)) return failure(state, '兵科を選んでください。');
+    const preset = UNIT_TYPES[action.unitType];
     return success({
       ...state,
       units: state.units.map((item) => item.id === unit.id
-        ? { ...item, type: action.unitType, moveDistance: UNIT_TYPES[action.unitType].moveDistance }
+        ? { ...item, type: action.unitType, moveDistance: preset.moveDistance,
+          hp: preset.maxHp, maxHp: preset.maxHp, attack: preset.attack, attackRange: preset.attackRange }
         : item),
+    });
+  }
+
+  if (action.type === 'set-side') {
+    if (!isUnitSide(action.side)) return failure(state, '陣営を選んでください。');
+    return success({ ...state, units: state.units.map((item) => item.id === unit.id ? { ...item, side: action.side } : item) });
+  }
+
+  if (action.type === 'set-combat-stat') {
+    if (!Object.hasOwn(COMBAT_STAT_LIMITS, action.stat)) return failure(state, '戦闘能力の項目を選んでください。');
+    const { min, max } = COMBAT_STAT_LIMITS[action.stat];
+    const names: Record<CombatStat, string> = { maxHp: '最大HP', attack: '攻撃力', attackRange: '射程' };
+    if (!Number.isInteger(action.value) || action.value < min || action.value > max) {
+      return failure(state, `${names[action.stat]}は${min}〜${max}の整数で指定してください。`);
+    }
+    return success({
+      ...state,
+      units: state.units.map((item) => item.id !== unit.id ? item
+        : { ...item, [action.stat]: action.value, ...(action.stat === 'maxHp' ? { hp: action.value } : {}) }),
     });
   }
 
@@ -275,7 +351,8 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
     return failure(state, '目的地は盤面内のマスを選んでください。');
   }
   const alreadyOrdered = state.orderedUnitIds.includes(unit.id);
-  if (!alreadyOrdered && state.orderedUnitIds.length >= state.rules.orderLimit) {
+  const sideOrderCount = state.units.filter((item) => item.side === unit.side && state.orderedUnitIds.includes(item.id)).length;
+  if (!alreadyOrdered && sideOrderCount >= state.rules.orderLimit) {
     return failure(state, 'このターンの指示枠を使い切りました。');
   }
   return success({

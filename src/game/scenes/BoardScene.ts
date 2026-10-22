@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
 import type { BoardState, Cell } from '../../core/board';
 import { unitLabel } from '../../core/labels';
-import { UNIT_TYPES } from '../../core/unitTypes';
+import { UNIT_SIDES, UNIT_TYPES } from '../../core/unitTypes';
+
+const SIDE_COLORS = Object.freeze({ ally: 0x245a81, enemy: 0xa13737 });
 
 export interface BoardView {
   board: BoardState;
@@ -111,6 +113,15 @@ export class BoardScene extends Phaser.Scene {
 
     const selected = board.units.find((unit) => unit.id === selectedUnitId);
     if (selected !== undefined) {
+      graphics.fillStyle(SIDE_COLORS[selected.side], 0.06);
+      for (let row = 0; row < board.height; row += 1) {
+        for (let column = 0; column < board.width; column += 1) {
+          const distance = Math.abs(column - selected.position.x) + Math.abs(row - selected.position.y);
+          if (distance > 0 && distance <= selected.attackRange) {
+            graphics.fillRect(x + column * cellSize, y + row * cellSize, cellSize, cellSize);
+          }
+        }
+      }
       graphics.fillStyle(0xe9e9e9, 1);
       graphics.fillRect(x + selected.position.x * cellSize, y + selected.position.y * cellSize, cellSize, cellSize);
     }
@@ -145,9 +156,9 @@ export class BoardScene extends Phaser.Scene {
       if (occupied && smallCell) continue;
       const label = this.text(
         cellX + cellSize / 2,
-        cellY + cellSize * (occupied ? 0.18 : 0.5),
+        cellY + cellSize * (occupied ? 0.14 : 0.5),
         names,
-        11,
+        occupied ? 10 : 11,
         '#555555',
       );
       const availableLabelWidth = Math.max(0, cellSize - inset * 2 - 2);
@@ -160,23 +171,32 @@ export class BoardScene extends Phaser.Scene {
       const goalHere = destinations.has(`${unit.position.x},${unit.position.y}`);
       const shiftForGoal = goalHere && !smallCell;
       const centerX = x + (unit.position.x + 0.5) * cellSize;
-      const centerY = y + (unit.position.y + (shiftForGoal ? 0.65 : 0.5)) * cellSize;
-      const radius = cellSize * (smallCell ? 0.43 : shiftForGoal ? 0.22 : 0.27);
+      const centerY = y + (unit.position.y + (smallCell ? 0.5 : shiftForGoal ? 0.51 : 0.44)) * cellSize;
+      const radius = cellSize * (smallCell ? 0.43 : shiftForGoal ? 0.2 : 0.27);
       const isSelected = unit.id === selectedUnitId;
-      graphics.fillStyle(isSelected ? 0x222222 : 0xffffff, 1);
-      graphics.fillCircle(centerX, centerY, radius);
-      graphics.lineStyle(1, 0x222222, 1);
-      graphics.strokeCircle(centerX, centerY, radius);
+      const sideColor = SIDE_COLORS[unit.side];
+      graphics.fillStyle(isSelected ? sideColor : 0xffffff, 1);
+      graphics.lineStyle(1, sideColor, 1);
+      if (unit.side === 'ally') {
+        graphics.fillCircle(centerX, centerY, radius);
+        graphics.strokeCircle(centerX, centerY, radius);
+      } else {
+        graphics.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
+        graphics.strokeRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
+      }
       const label = `${unitLabel(unit.id)}${UNIT_TYPES[unit.type].mark}`;
       const fontSize = Math.max(11, Math.min(16, cellSize * 0.22));
       const text = this.text(centerX, centerY, label, fontSize, isSelected ? '#ffffff' : '#111111');
       // 小さいマスや長い識別名でも、ラベルを隣のユニットへ重ねない。
       const availableLabelWidth = Math.max(1, Math.min(cellSize - 4, radius * 2 - 4));
       if (text.width > availableLabelWidth) text.setScale(availableLabelWidth / text.width);
+      if (!smallCell) {
+        this.text(centerX, y + (unit.position.y + 0.85) * cellSize, `${unit.hp}/${unit.maxHp}`, 10, '#555555');
+      }
     }
 
     const selectedDescription = selected === undefined ? '選択なし'
-      : `選択中のユニット ${unitLabel(selected.id)} ${UNIT_TYPES[selected.type].name}、移動力${selected.moveDistance}マス`;
+      : `選択中のユニット ${unitLabel(selected.id)} ${UNIT_SIDES[selected.side].name} ${UNIT_TYPES[selected.type].name}、HP${selected.hp}/${selected.maxHp}、攻撃力${selected.attack}、射程${selected.attackRange}マス、移動力${selected.moveDistance}マス`;
     this.game.canvas.setAttribute('aria-label', `${board.width}列${board.height}行の盤面、ユニット${board.units.length}体、ターン${board.turn}、${selectedDescription}`);
     this.game.canvas.style.cursor = this.view.targeting ? 'crosshair' : 'default';
   }

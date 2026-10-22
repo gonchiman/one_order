@@ -3,8 +3,8 @@ import { createGame } from './game/createGame';
 import { applyAction, createBoard, DEFAULT_BOARD_SIZE } from './core/board';
 import type { BoardAction, BoardState, Cell, UnitEvent } from './core/board';
 import { unitLabel } from './core/labels';
-import { MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_TYPES } from './core/unitTypes';
-import type { UnitType } from './core/unitTypes';
+import { COMBAT_STAT_LIMITS, MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_SIDES, UNIT_TYPES } from './core/unitTypes';
+import type { CombatStat, UnitSide, UnitType } from './core/unitTypes';
 import { createAppShell } from './ui/appShell';
 import { createEditorTabs } from './ui/editorTabs';
 import {
@@ -21,6 +21,10 @@ if (app === null) throw new Error('画面の配置先がありません。');
 const shell = createAppShell(app);
 const typeOptions = Object.entries(UNIT_TYPES)
   .map(([value, definition]) => `<option value="${value}">${definition.name}</option>`).join('');
+const sideOptions = Object.entries(UNIT_SIDES)
+  .map(([value, definition]) => `<option value="${value}">${definition.name}</option>`).join('');
+const combatFields = (Object.entries(COMBAT_STAT_LIMITS) as [CombatStat, { min: number; max: number }][])
+  .map(([stat, limits]) => `<label>${{ maxHp: '最大HP', attack: '攻撃力', attackRange: '射程' }[stat]}<input id="${stat}" type="number" min="${limits.min}" max="${limits.max}" step="1" required></label>`).join('');
 shell.content.innerHTML = `
   <h1>実験盤</h1>
   <nav class="toolbar" aria-label="実験の操作">
@@ -37,7 +41,8 @@ shell.content.innerHTML = `
         <button type="button" id="reset">開始配置に戻す</button>
       </div>
       <p id="status" role="status" aria-live="polite"></p>
-      <table class="unit-list"><thead><tr><th scope="col">ユニット</th><th scope="col">兵科</th><th scope="col">移動力</th></tr></thead><tbody id="unit-rows"></tbody></table>
+      <table class="unit-list"><thead><tr><th scope="col">ユニット</th><th scope="col">陣営</th><th scope="col">兵科</th><th scope="col">HP</th><th scope="col">移動力</th></tr></thead><tbody id="unit-rows"></tbody></table>
+      <section id="combat-log" class="combat-log" aria-labelledby="combat-heading" hidden><h2 id="combat-heading">戦闘</h2><ul id="combat-events"></ul></section>
     </section>
     <aside class="editor" aria-label="マップとユニットの編集">
       <div class="editor-tabs" role="tablist" aria-label="編集対象">
@@ -58,9 +63,13 @@ shell.content.innerHTML = `
             <h2 id="unit-editor-title">選択中のユニット</h2>
             <select id="selected-unit" aria-label="選択中のユニット"></select>
           </header>
+          <label class="editor-field" id="placement-side-field" hidden><span>追加する陣営</span><select id="placement-side">${sideOptions}</select></label>
           <label class="editor-field" id="placement-type-field" hidden><span>追加する兵科</span><select id="placement-type">${typeOptions}</select></label>
           <div id="selected-properties">
+            <label class="editor-field"><span>陣営</span><select id="selected-side">${sideOptions}</select></label>
             <label class="editor-field"><span>兵科</span><select id="selected-type">${typeOptions}</select></label>
+            <div class="editor-field"><span>現在HP</span><output id="current-hp"></output></div>
+            <div class="combat-fields">${combatFields}</div>
             <label class="editor-field"><span>移動力</span><span class="move-field"><input id="move-distance" type="number" min="${MIN_MOVE_DISTANCE}" max="${MAX_MOVE_DISTANCE}" step="1" required><span>マス</span></span></label>
             <button type="button" id="reset-move-distance" class="reset-move">移動力を初期値に戻す</button>
           </div>
@@ -117,6 +126,8 @@ const controls = {
   tools: Array.from(document.querySelectorAll<HTMLButtonElement>('[data-edit-tool]')),
   createMap: element<HTMLButtonElement>('#create-map'),
   mapSize: element<HTMLOutputElement>('#map-size'),
+  placementSideField: element<HTMLLabelElement>('#placement-side-field'),
+  placementSide: element<HTMLSelectElement>('#placement-side'),
   placementTypeField: element<HTMLLabelElement>('#placement-type-field'),
   placementType: element<HTMLSelectElement>('#placement-type'),
   selected: element<HTMLSelectElement>('#selected-unit'),
@@ -124,6 +135,8 @@ const controls = {
   unitEditorTitle: element<HTMLHeadingElement>('#unit-editor-title'),
   details: element<HTMLElement>('#unit-details'),
   selectedType: element<HTMLSelectElement>('#selected-type'),
+  selectedSide: element<HTMLSelectElement>('#selected-side'),
+  currentHp: element<HTMLOutputElement>('#current-hp'),
   moveDistance: element<HTMLInputElement>('#move-distance'),
   resetMoveDistance: element<HTMLButtonElement>('#reset-move-distance'),
   position: element<HTMLElement>('#position'),
@@ -139,6 +152,13 @@ const controls = {
   apply: element<HTMLButtonElement>('#apply-coordinate'),
   orderLimit: element<HTMLElement>('#order-limit'),
   rows: element<HTMLTableSectionElement>('#unit-rows'),
+  combatLog: element<HTMLElement>('#combat-log'),
+  combatEvents: element<HTMLUListElement>('#combat-events'),
+};
+const combatInputs: Record<CombatStat, HTMLInputElement> = {
+  maxHp: element<HTMLInputElement>('#maxHp'),
+  attack: element<HTMLInputElement>('#attack'),
+  attackRange: element<HTMLInputElement>('#attackRange'),
 };
 
 const editorTabs = createEditorTabs({
@@ -154,7 +174,12 @@ function initialBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_SIZE): 
   board = applyAction(board, { type: 'move', unitId: 1, position: { x: left, y: height - 2 } }).state;
   board = applyAction(board, { type: 'move', unitId: 2, position: { x: left + 1, y: height - 2 } }).state;
   board = applyAction(board, { type: 'set-type', unitId: 2, unitType: 'cavalry' }).state;
-  return applyAction(board, { type: 'add', unitType: 'archer', position: { x: left + 2, y: height - 2 } }).state;
+  board = applyAction(board, { type: 'add', unitType: 'archer', position: { x: left + 2, y: height - 2 } }).state;
+  const enemyRow = height >= 4 ? 1 : 0;
+  (Object.keys(UNIT_TYPES) as UnitType[]).forEach((unitType, index) => {
+    board = applyAction(board, { type: 'add', side: 'enemy', unitType, position: { x: left + index, y: enemyRow } }).state;
+  });
+  return board;
 }
 
 let session = createSession(initialBoard());
@@ -197,16 +222,27 @@ function render(): void {
   const editing = mode === 'edit';
   const adding = editing && editTool === 'add';
   const removing = editing && editTool === 'remove';
-  if (!board.units.some((unit) => unit.id === selectedId)) selectedId = board.units[0]?.id ?? null;
+  if (!board.units.some((unit) => unit.id === selectedId)) {
+    const fallback = board.units[0];
+    selectedId = fallback?.id ?? null;
+    cursor = { ...(fallback === undefined ? { x: 0, y: 0 }
+      : editing ? fallback.position : fallback.destination ?? fallback.position) };
+  }
   const unit = board.units.find((item) => item.id === selectedId);
   cursor = { x: Math.min(Math.max(cursor.x, 0), board.width - 1), y: Math.min(Math.max(cursor.y, 0), board.height - 1) };
   controls.edit.setAttribute('aria-pressed', String(editing));
   controls.run.setAttribute('aria-pressed', String(!editing));
   controls.turn.value = `ターン ${board.turn}`;
-  controls.orderCount.value = editing ? `ユニット ${board.units.length}体` : `指示 ${board.orderedUnitIds.length} / ${board.rules.orderLimit}体`;
+  controls.orderCount.value = (Object.keys(UNIT_SIDES) as UnitSide[]).map((side) => {
+    const units = board.units.filter((item) => item.side === side);
+    const used = units.filter((item) => board.orderedUnitIds.includes(item.id)).length;
+    return editing ? `${UNIT_SIDES[side].name} ${units.length}体` : `${UNIT_SIDES[side].name} ${used}/${board.rules.orderLimit}`;
+  }).join('・');
+  if (!editing) controls.orderCount.value = `指示 ${controls.orderCount.value}`;
   controls.editing.hidden = !editing;
   controls.tools.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.editTool === editTool)));
   controls.placementTypeField.hidden = !adding;
+  controls.placementSideField.hidden = !adding;
   controls.selected.hidden = adding;
   controls.selectedProperties.hidden = adding || removing;
   controls.unitEditorTitle.textContent = adding ? 'ユニットを追加' : removing ? 'ユニットを削除' : '選択中のユニット';
@@ -232,6 +268,13 @@ function render(): void {
   controls.selected.disabled = unit === undefined;
   controls.selectedType.value = unit?.type ?? '';
   controls.selectedType.disabled = !editing || unit === undefined;
+  controls.selectedSide.value = unit?.side ?? '';
+  controls.selectedSide.disabled = !editing || unit === undefined;
+  controls.currentHp.value = unit === undefined ? '—' : `${unit.hp} / ${unit.maxHp}`;
+  for (const stat of Object.keys(combatInputs) as CombatStat[]) {
+    combatInputs[stat].value = unit === undefined ? '' : String(unit[stat]);
+    combatInputs[stat].disabled = !editing || unit === undefined;
+  }
   controls.moveDistance.value = unit === undefined ? '' : String(unit.moveDistance);
   controls.moveDistance.disabled = !editing || unit === undefined;
   controls.resetMoveDistance.hidden = !editing;
@@ -240,7 +283,7 @@ function render(): void {
   controls.destination.textContent = unit === undefined ? '—' : formatCell(unit.destination);
   const event = session.events.find((item) => item.unitId === selectedId);
   controls.lastAction.textContent = event === undefined ? '—' : eventLabels[event.reason];
-  controls.orderLimit.textContent = `${board.rules.orderLimit}体 / ターン`;
+  controls.orderLimit.textContent = `${board.rules.orderLimit}体 / 陣営 / ターン`;
   controls.x.max = String(board.width);
   controls.y.max = String(board.height);
   controls.x.value = String(cursor.x + 1);
@@ -263,15 +306,30 @@ function render(): void {
       select.setAttribute('aria-label', `ユニット ${unitLabel(item.id)} を選択`);
       select.addEventListener('click', () => selectUnit(item.id));
       row.insertCell().append(select);
-      row.insertCell(); row.insertCell();
+      row.insertCell(); row.insertCell(); row.insertCell(); row.insertCell();
     }
     row.querySelector('button')?.setAttribute('aria-pressed', String(item.id === selectedId));
-    row.cells[1]!.textContent = UNIT_TYPES[item.type].name;
-    row.cells[2]!.textContent = `${item.moveDistance}マス`;
+    row.cells[1]!.textContent = UNIT_SIDES[item.side].name;
+    row.cells[2]!.textContent = UNIT_TYPES[item.type].name;
+    row.cells[3]!.textContent = `${item.hp}/${item.maxHp}`;
+    row.cells[4]!.textContent = `${item.moveDistance}マス`;
     if (controls.rows.rows[index] !== row) controls.rows.insertBefore(row, controls.rows.rows[index] ?? null);
     rows.delete(item.id);
   });
   rows.forEach((row) => row.remove());
+  controls.combatLog.hidden = session.combatEvents.length === 0;
+  const entries = session.combatEvents.map((event) => {
+    const entry = document.createElement('li');
+    entry.textContent = `${unitLabel(event.attackerId)} → ${unitLabel(event.targetId)}：${event.damage}ダメージ`;
+    return entry;
+  });
+  const defeated = [...new Set(session.combatEvents.filter((event) => event.defeated).map((event) => event.targetId))];
+  if (defeated.length > 0) {
+    const entry = document.createElement('li');
+    entry.textContent = `撃破：${defeated.map(unitLabel).join('・')}`;
+    entries.push(entry);
+  }
+  controls.combatEvents.replaceChildren(...entries);
   controls.board.style.width = `min(100%, ${Math.round(520 * (board.width + 1) / (board.height + 1))}px)`;
   controls.board.style.aspectRatio = `${board.width + 1} / ${board.height + 1}`;
   boardGame?.render({ board, selectedUnitId: selectedId, targeting });
@@ -290,7 +348,9 @@ function perform(action: BoardAction): boolean {
   if (action.type === 'advance') {
     const moved = session.events.filter((event) => event.from.x !== event.to.x || event.from.y !== event.to.y).length;
     const blocked = session.events.filter((event) => ['conflict', 'occupied', 'cycle'].includes(event.reason)).length;
-    setStatus(`${moved}体移動${blocked > 0 ? `・${blocked}体停止` : ''}`);
+    const attacks = session.combatEvents.length;
+    const defeated = new Set(session.combatEvents.filter((event) => event.defeated).map((event) => event.targetId)).size;
+    setStatus(`${moved}体移動${blocked > 0 ? `・${blocked}体停止` : ''}・${attacks}回攻撃${defeated > 0 ? `・${defeated}体撃破` : ''}`);
   } else if (action.type === 'order') {
     targeting = false;
     setStatus(`ユニット ${unitLabel(action.unitId)}：${action.destination === null ? '指示を解除' : `目的地 ${formatCell(action.destination)}`}`);
@@ -309,7 +369,7 @@ function applyAt(position: Cell): void {
     return;
   }
   if (editTool === 'add') {
-    perform({ type: 'add', position, unitType: controls.placementType.value as UnitType });
+    perform({ type: 'add', position, unitType: controls.placementType.value as UnitType, side: controls.placementSide.value as UnitSide });
   } else if (editTool === 'remove') {
     const occupant = session.board.units.find((unit) => unit.position.x === position.x && unit.position.y === position.y);
     if (occupant === undefined) { setStatus('そのマスにユニットがありません。', true); render(); return; }
@@ -379,6 +439,14 @@ controls.selected.addEventListener('change', () => selectUnit(Number(controls.se
 controls.selectedType.addEventListener('change', () => {
   if (selectedId !== null) perform({ type: 'set-type', unitId: selectedId, unitType: controls.selectedType.value as UnitType });
 });
+controls.selectedSide.addEventListener('change', () => {
+  if (selectedId !== null) perform({ type: 'set-side', unitId: selectedId, side: controls.selectedSide.value as UnitSide });
+});
+for (const stat of Object.keys(combatInputs) as CombatStat[]) {
+  combatInputs[stat].addEventListener('change', () => {
+    if (selectedId !== null) perform({ type: 'set-combat-stat', unitId: selectedId, stat, value: combatInputs[stat].valueAsNumber });
+  });
+}
 controls.moveDistance.addEventListener('change', () => {
   if (selectedId !== null) perform({ type: 'set-move-distance', unitId: selectedId, moveDistance: controls.moveDistance.valueAsNumber });
 });

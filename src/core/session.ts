@@ -1,9 +1,10 @@
 import { applyAction, createBoard } from './board';
-import type { BoardAction, BoardState, UnitEvent } from './board';
+import type { BoardAction, BoardState, CombatEvent, UnitEvent } from './board';
 
 export interface TurnSnapshot {
   board: BoardState;
   events: UnitEvent[];
+  combatEvents: CombatEvent[];
 }
 
 export interface SandboxSession {
@@ -11,6 +12,7 @@ export interface SandboxSession {
   initialBoard: BoardState;
   history: TurnSnapshot[];
   events: UnitEvent[];
+  combatEvents: CombatEvent[];
   mode: 'edit' | 'run';
 }
 
@@ -25,6 +27,7 @@ export function createSession(board: BoardState = createBoard()): SandboxSession
     initialBoard,
     history: [],
     events: [],
+    combatEvents: [],
     mode: 'edit',
   };
 }
@@ -36,6 +39,7 @@ export function startExperiment(session: SandboxSession): SandboxSession {
     initialBoard,
     history: [],
     events: [],
+    combatEvents: [],
     mode: 'run',
   };
 }
@@ -50,6 +54,7 @@ export function editExperiment(session: SandboxSession): SandboxSession {
     },
     history: [],
     events: [],
+    combatEvents: [],
     mode: 'edit',
   };
 }
@@ -60,6 +65,7 @@ export function resetExperiment(session: SandboxSession): SandboxSession {
     board: startingBoard(session.initialBoard),
     history: [],
     events: [],
+    combatEvents: [],
   };
 }
 
@@ -70,6 +76,7 @@ export function undoTurn(session: SandboxSession): SandboxSession {
     ...session,
     board: structuredClone(snapshot.board),
     events: structuredClone(snapshot.events),
+    combatEvents: structuredClone(snapshot.combatEvents),
     history: session.history.slice(0, -1),
   };
 }
@@ -79,7 +86,8 @@ export function actOnSession(
   action: BoardAction,
 ): { session: SandboxSession; error: string | null } {
   const editing = action.type === 'add' || action.type === 'move' || action.type === 'remove'
-    || action.type === 'set-type' || action.type === 'set-move-distance' || action.type === 'reset-move-distance';
+    || action.type === 'set-type' || action.type === 'set-move-distance' || action.type === 'reset-move-distance'
+    || action.type === 'set-side' || action.type === 'set-combat-stat';
   if (editing && session.mode !== 'edit') {
     return { session, error: '配置を変更するには「配置編集」に切り替えてください。' };
   }
@@ -96,9 +104,14 @@ export function actOnSession(
         ...session,
         board: result.state,
         events: structuredClone(result.events),
+        combatEvents: structuredClone(result.combatEvents),
         history: [
           ...session.history,
-          { board: structuredClone(session.board), events: structuredClone(session.events) },
+          {
+            board: structuredClone(session.board),
+            events: structuredClone(session.events),
+            combatEvents: structuredClone(session.combatEvents),
+          },
         ],
       },
       error: null,
@@ -110,6 +123,7 @@ export function actOnSession(
       ...session,
       board: result.state,
       events: editing ? [] : session.events,
+      combatEvents: editing ? [] : session.combatEvents,
     },
     error: null,
   };
