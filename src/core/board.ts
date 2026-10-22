@@ -19,6 +19,7 @@ export interface BoardRules {
 }
 
 export const DEFAULT_RULES: BoardRules = Object.freeze({ orderLimit: 1 });
+export const DEFAULT_BOARD_SIZE = 9;
 
 export interface BoardState {
   width: number;
@@ -58,7 +59,7 @@ function validDimension(value: number): boolean {
   return Number.isInteger(value) && value >= 3 && value <= 12;
 }
 
-export function createBoard(width = 5, height = 5, rules: BoardRules = DEFAULT_RULES): BoardState {
+export function createBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_SIZE, rules: BoardRules = DEFAULT_RULES): BoardState {
   if (!validDimension(width) || !validDimension(height)) {
     throw new RangeError('盤面の幅と高さは3〜12の整数で指定してください。');
   }

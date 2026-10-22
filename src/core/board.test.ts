@@ -31,10 +31,10 @@ function deepFreeze<T>(value: T): T {
 describe('実験盤の初期化と配置編集', () => {
   it('ユニット2体を盤面の左下と右下に配置して開始する', () => {
     expect(createBoard()).toEqual({
-      width: 5,
-      height: 5,
+      width: 9,
+      height: 9,
       turn: 0,
-      units: [makeUnit(1, 0, 4), makeUnit(2, 4, 4)],
+      units: [makeUnit(1, 0, 8), makeUnit(2, 8, 8)],
       nextId: 3,
       orderedUnitIds: [],
       rules: { ...DEFAULT_RULES },

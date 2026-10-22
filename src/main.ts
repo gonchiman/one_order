@@ -1,6 +1,6 @@
 import './style.css';
 import { createGame } from './game/createGame';
-import { applyAction, createBoard } from './core/board';
+import { applyAction, createBoard, DEFAULT_BOARD_SIZE } from './core/board';
 import type { BoardAction, BoardState, Cell, UnitEvent } from './core/board';
 import { unitLabel } from './core/labels';
 import { MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_TYPES } from './core/unitTypes';
@@ -72,8 +72,8 @@ shell.content.innerHTML = `
           <form id="coordinate-form" class="coordinate-fields">
             <h3 id="coordinate-title">配置位置</h3>
             <div class="input-pair">
-              <label>X <input id="cell-x" type="number" min="1" max="5" step="1" value="2" required></label>
-              <label>Y <input id="cell-y" type="number" min="1" max="5" step="1" value="4" required></label>
+              <label>X <input id="cell-x" type="number" min="1" max="${DEFAULT_BOARD_SIZE}" step="1" required></label>
+              <label>Y <input id="cell-y" type="number" min="1" max="${DEFAULT_BOARD_SIZE}" step="1" required></label>
             </div>
             <button type="submit" id="apply-coordinate" class="full-width">ユニットを移動</button>
           </form>
@@ -84,8 +84,8 @@ shell.content.innerHTML = `
         <header class="section-heading"><h2>マップ</h2><output id="map-size"></output></header>
         <form id="size-form" class="fields">
           <div class="input-pair">
-            <label>幅（マス） <input id="width" type="number" min="3" max="12" step="1" value="5" required></label>
-            <label>高さ（マス） <input id="height" type="number" min="3" max="12" step="1" value="5" required></label>
+            <label>幅（マス） <input id="width" type="number" min="3" max="12" step="1" value="${DEFAULT_BOARD_SIZE}" required></label>
+            <label>高さ（マス） <input id="height" type="number" min="3" max="12" step="1" value="${DEFAULT_BOARD_SIZE}" required></label>
           </div>
           <button type="submit" id="create-map">新しいマップを作成</button>
         </form>
@@ -148,7 +148,7 @@ const editorTabs = createEditorTabs({
 type EditTool = 'move' | 'add' | 'remove';
 let editTool: EditTool = 'move';
 
-function initialBoard(width = 5, height = 5): BoardState {
+function initialBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_SIZE): BoardState {
   let board = createBoard(width, height);
   const left = Math.floor((width - 3) / 2);
   board = applyAction(board, { type: 'move', unitId: 1, position: { x: left, y: height - 2 } }).state;
