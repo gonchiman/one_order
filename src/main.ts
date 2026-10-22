@@ -6,6 +6,7 @@ import { unitLabel } from './core/labels';
 import { MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_TYPES } from './core/unitTypes';
 import type { UnitType } from './core/unitTypes';
 import { createAppShell } from './ui/appShell';
+import { createEditorTabs } from './ui/editorTabs';
 import {
   actOnSession,
   createSession,
@@ -28,7 +29,7 @@ shell.content.innerHTML = `
     <div class="counters"><output id="turn"></output><output id="order-count"></output></div>
   </nav>
   <div class="workspace">
-    <section class="board-section" aria-label="盤面とターン操作">
+    <section class="board-section" aria-label="盤面とユニット一覧">
       <div id="board"></div>
       <div class="turn-actions">
         <button type="button" id="advance">1ターン進める</button>
@@ -36,43 +37,59 @@ shell.content.innerHTML = `
         <button type="button" id="reset">開始配置に戻す</button>
       </div>
       <p id="status" role="status" aria-live="polite"></p>
+      <table class="unit-list"><thead><tr><th scope="col">ユニット</th><th scope="col">兵科</th><th scope="col">移動力</th></tr></thead><tbody id="unit-rows"></tbody></table>
     </section>
-    <aside aria-label="配置とユニットの操作">
-      <div id="editing-controls">
-        <form id="size-form" class="fields">
-          <div class="size-fields">
-            <label>幅 <input id="width" type="number" min="3" max="12" step="1" value="5" required></label>
-            <label>高さ <input id="height" type="number" min="3" max="12" step="1" value="5" required></label>
+    <aside class="editor" aria-label="マップとユニットの編集">
+      <div class="editor-tabs" role="tablist" aria-label="編集対象">
+        <button type="button" id="editor-tab-unit" role="tab" aria-controls="editor-panel-unit" aria-selected="true">ユニット</button>
+        <button type="button" id="editor-tab-map" role="tab" aria-controls="editor-panel-map" aria-selected="false" tabindex="-1">マップ</button>
+      </div>
+      <section id="editor-panel-unit" role="tabpanel" aria-labelledby="editor-tab-unit">
+        <section id="editing-controls" class="editor-section" aria-labelledby="placement-heading">
+          <h2 id="placement-heading">配置</h2>
+          <div class="placement-tools" role="group" aria-label="配置操作">
+            <button type="button" data-edit-tool="move" aria-pressed="true">選択・移動</button>
+            <button type="button" data-edit-tool="add" aria-pressed="false">追加</button>
+            <button type="button" data-edit-tool="remove" aria-pressed="false">削除</button>
           </div>
-          <button type="submit">盤面を作成</button>
+        </section>
+        <section class="editor-section" aria-labelledby="unit-editor-title">
+          <header class="section-heading">
+            <h2 id="unit-editor-title">選択中のユニット</h2>
+            <select id="selected-unit" aria-label="選択中のユニット"></select>
+          </header>
+          <label class="editor-field" id="placement-type-field" hidden><span>追加する兵科</span><select id="placement-type">${typeOptions}</select></label>
+          <div id="selected-properties">
+            <label class="editor-field"><span>兵科</span><select id="selected-type">${typeOptions}</select></label>
+            <label class="editor-field"><span>移動力</span><span class="move-field"><input id="move-distance" type="number" min="${MIN_MOVE_DISTANCE}" max="${MAX_MOVE_DISTANCE}" step="1" required><span>マス</span></span></label>
+            <button type="button" id="reset-move-distance" class="reset-move">移動力を初期値に戻す</button>
+          </div>
+          <dl class="unit-details" id="unit-details" hidden><dt>現在地</dt><dd id="position"></dd><dt>目的地</dt><dd id="destination"></dd><dt>直前の行動</dt><dd id="last-action"></dd></dl>
+          <div id="point-controls" class="fields" hidden>
+            <button type="button" id="pick-target" aria-pressed="false">目的地を指定</button>
+            <button type="button" id="clear-order">指示を解除</button>
+          </div>
+          <form id="coordinate-form" class="coordinate-fields">
+            <h3 id="coordinate-title">配置位置</h3>
+            <div class="input-pair">
+              <label>X <input id="cell-x" type="number" min="1" max="5" step="1" value="2" required></label>
+              <label>Y <input id="cell-y" type="number" min="1" max="5" step="1" value="4" required></label>
+            </div>
+            <button type="submit" id="apply-coordinate" class="full-width">ユニットを移動</button>
+          </form>
+        </section>
+        <dl class="rules"><dt>指示上限</dt><dd id="order-limit"></dd></dl>
+      </section>
+      <section id="editor-panel-map" role="tabpanel" aria-labelledby="editor-tab-map" hidden>
+        <header class="section-heading"><h2>マップ</h2><output id="map-size"></output></header>
+        <form id="size-form" class="fields">
+          <div class="input-pair">
+            <label>幅（マス） <input id="width" type="number" min="3" max="12" step="1" value="5" required></label>
+            <label>高さ（マス） <input id="height" type="number" min="3" max="12" step="1" value="5" required></label>
+          </div>
+          <button type="submit" id="create-map">新しいマップを作成</button>
         </form>
-        <label class="field">操作
-          <select id="edit-tool"><option value="move">ユニットを移動</option><option value="add">ユニットを追加</option><option value="remove">ユニットを削除</option></select>
-        </label>
-        <label class="field" id="placement-type-field" hidden>追加する兵科
-          <select id="placement-type">${typeOptions}</select>
-        </label>
-      </div>
-      <label class="field">選択中のユニット <select id="selected-unit"></select></label>
-      <label class="field">兵科 <select id="selected-type">${typeOptions}</select></label>
-      <label class="field">移動力 <input id="move-distance" type="number" min="${MIN_MOVE_DISTANCE}" max="${MAX_MOVE_DISTANCE}" step="1" required> マス</label>
-      <button type="button" id="reset-move-distance" class="full-width">移動力を初期値に戻す</button>
-      <dl class="unit-details"><dt>現在地</dt><dd id="position"></dd><dt>目的地</dt><dd id="destination"></dd><dt>直前の行動</dt><dd id="last-action"></dd></dl>
-      <div id="point-controls" class="fields" hidden>
-        <button type="button" id="pick-target" aria-pressed="false">目的地を指定</button>
-        <button type="button" id="clear-order">指示を解除</button>
-      </div>
-      <form id="coordinate-form" class="fields">
-        <div class="size-fields">
-          <label>X <input id="cell-x" type="number" min="1" max="5" step="1" value="2" required></label>
-          <label>Y <input id="cell-y" type="number" min="1" max="5" step="1" value="4" required></label>
-        </div>
-        <button type="submit" id="apply-coordinate">ユニットを移動</button>
-      </form>
-      <button type="button" id="remove-selected" class="full-width">選択したユニットを削除</button>
-      <hr>
-      <dl class="rules"><dt>指示上限</dt><dd id="order-limit"></dd></dl>
-      <table><thead><tr><th scope="col">ユニット</th><th scope="col">兵科</th><th scope="col">移動力</th></tr></thead><tbody id="unit-rows"></tbody></table>
+      </section>
     </aside>
   </div>
 `;
@@ -93,14 +110,19 @@ const controls = {
   undo: element<HTMLButtonElement>('#undo'),
   reset: element<HTMLButtonElement>('#reset'),
   status: element<HTMLParagraphElement>('#status'),
-  editing: element<HTMLDivElement>('#editing-controls'),
+  editing: element<HTMLElement>('#editing-controls'),
   sizeForm: element<HTMLFormElement>('#size-form'),
   width: element<HTMLInputElement>('#width'),
   height: element<HTMLInputElement>('#height'),
-  tool: element<HTMLSelectElement>('#edit-tool'),
+  tools: Array.from(document.querySelectorAll<HTMLButtonElement>('[data-edit-tool]')),
+  createMap: element<HTMLButtonElement>('#create-map'),
+  mapSize: element<HTMLOutputElement>('#map-size'),
   placementTypeField: element<HTMLLabelElement>('#placement-type-field'),
   placementType: element<HTMLSelectElement>('#placement-type'),
   selected: element<HTMLSelectElement>('#selected-unit'),
+  selectedProperties: element<HTMLDivElement>('#selected-properties'),
+  unitEditorTitle: element<HTMLHeadingElement>('#unit-editor-title'),
+  details: element<HTMLElement>('#unit-details'),
   selectedType: element<HTMLSelectElement>('#selected-type'),
   moveDistance: element<HTMLInputElement>('#move-distance'),
   resetMoveDistance: element<HTMLButtonElement>('#reset-move-distance'),
@@ -111,13 +133,20 @@ const controls = {
   pickTarget: element<HTMLButtonElement>('#pick-target'),
   clearOrder: element<HTMLButtonElement>('#clear-order'),
   coordinateForm: element<HTMLFormElement>('#coordinate-form'),
+  coordinateTitle: element<HTMLHeadingElement>('#coordinate-title'),
   x: element<HTMLInputElement>('#cell-x'),
   y: element<HTMLInputElement>('#cell-y'),
   apply: element<HTMLButtonElement>('#apply-coordinate'),
-  remove: element<HTMLButtonElement>('#remove-selected'),
   orderLimit: element<HTMLElement>('#order-limit'),
   rows: element<HTMLTableSectionElement>('#unit-rows'),
 };
+
+const editorTabs = createEditorTabs({
+  unit: { tab: element<HTMLButtonElement>('#editor-tab-unit'), panel: element<HTMLElement>('#editor-panel-unit') },
+  map: { tab: element<HTMLButtonElement>('#editor-tab-map'), panel: element<HTMLElement>('#editor-panel-map') },
+});
+type EditTool = 'move' | 'add' | 'remove';
+let editTool: EditTool = 'move';
 
 function initialBoard(width = 5, height = 5): BoardState {
   let board = createBoard(width, height);
@@ -151,10 +180,12 @@ function setStatus(message = '', error = false): void {
   isError = error;
 }
 
-function selectUnit(id: number): void {
+function selectUnit(id: number, preserveTool = false): void {
   const unit = session.board.units.find((item) => item.id === id);
   if (unit === undefined) return;
   selectedId = id;
+  if (session.mode === 'edit' && !preserveTool) editTool = 'move';
+  editorTabs.select('unit');
   cursor = { ...(session.mode === 'run' ? unit.destination ?? unit.position : unit.position) };
   targeting = false;
   setStatus();
@@ -164,6 +195,8 @@ function selectUnit(id: number): void {
 function render(): void {
   const { board, mode } = session;
   const editing = mode === 'edit';
+  const adding = editing && editTool === 'add';
+  const removing = editing && editTool === 'remove';
   if (!board.units.some((unit) => unit.id === selectedId)) selectedId = board.units[0]?.id ?? null;
   const unit = board.units.find((item) => item.id === selectedId);
   cursor = { x: Math.min(Math.max(cursor.x, 0), board.width - 1), y: Math.min(Math.max(cursor.y, 0), board.height - 1) };
@@ -172,12 +205,19 @@ function render(): void {
   controls.turn.value = `ターン ${board.turn}`;
   controls.orderCount.value = editing ? `ユニット ${board.units.length}体` : `指示 ${board.orderedUnitIds.length} / ${board.rules.orderLimit}体`;
   controls.editing.hidden = !editing;
-  controls.placementTypeField.hidden = controls.tool.value !== 'add';
+  controls.tools.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.editTool === editTool)));
+  controls.placementTypeField.hidden = !adding;
+  controls.selected.hidden = adding;
+  controls.selectedProperties.hidden = adding || removing;
+  controls.unitEditorTitle.textContent = adding ? 'ユニットを追加' : removing ? 'ユニットを削除' : '選択中のユニット';
+  controls.details.hidden = editing;
   controls.point.hidden = editing;
-  controls.remove.hidden = !editing;
+  controls.width.disabled = !editing;
+  controls.height.disabled = !editing;
+  controls.createMap.hidden = !editing;
+  controls.mapSize.value = `${board.width} × ${board.height}`;
   controls.advance.disabled = editing;
   controls.undo.disabled = editing || session.history.length === 0;
-  controls.remove.disabled = unit === undefined;
   controls.pickTarget.disabled = unit === undefined;
   controls.clearOrder.disabled = unit === undefined;
   controls.pickTarget.textContent = targeting ? '指定を取り消す' : '目的地を指定';
@@ -205,8 +245,9 @@ function render(): void {
   controls.y.max = String(board.height);
   controls.x.value = String(cursor.x + 1);
   controls.y.value = String(cursor.y + 1);
-  controls.apply.textContent = editing ? { move: 'ユニットを移動', add: 'ユニットを追加', remove: 'そのマスのユニットを削除' }[controls.tool.value] ?? 'ユニットを移動' : '目的地を指示';
-  controls.apply.disabled = unit === undefined && (!editing || controls.tool.value === 'move');
+  controls.coordinateTitle.textContent = editing ? removing ? '削除する位置' : '配置位置' : '目的地';
+  controls.apply.textContent = editing ? { move: 'ユニットを移動', add: 'ユニットを追加', remove: 'ユニットを削除' }[editTool] : '目的地を指示';
+  controls.apply.disabled = unit === undefined && (!editing || editTool === 'move');
   controls.status.textContent = status;
   controls.status.setAttribute('role', isError ? 'alert' : 'status');
   controls.status.classList.toggle('error', isError);
@@ -267,9 +308,9 @@ function applyAt(position: Cell): void {
     perform({ type: 'order', unitId: selectedId, destination: position });
     return;
   }
-  if (controls.tool.value === 'add') {
+  if (editTool === 'add') {
     perform({ type: 'add', position, unitType: controls.placementType.value as UnitType });
-  } else if (controls.tool.value === 'remove') {
+  } else if (editTool === 'remove') {
     const occupant = session.board.units.find((unit) => unit.position.x === position.x && unit.position.y === position.y);
     if (occupant === undefined) { setStatus('そのマスにユニットがありません。', true); render(); return; }
     perform({ type: 'remove', unitId: occupant.id });
@@ -282,7 +323,7 @@ function applyAt(position: Cell): void {
 
 function clickCell(cell: Cell): void {
   const occupant = session.board.units.find((unit) => unit.position.x === cell.x && unit.position.y === cell.y);
-  if (occupant !== undefined && !targeting && (session.mode === 'run' || controls.tool.value === 'move')) {
+  if (occupant !== undefined && !targeting && (session.mode === 'run' || editTool === 'move')) {
     selectUnit(occupant.id);
   } else {
     applyAt(cell);
@@ -292,12 +333,18 @@ function clickCell(cell: Cell): void {
 controls.edit.addEventListener('click', () => {
   if (session.mode === 'edit') return;
   session = editExperiment(session);
+  editTool = 'move';
+  const unit = session.board.units.find((item) => item.id === selectedId);
+  cursor = { ...(unit?.position ?? { x: 0, y: 0 }) };
   targeting = false;
   setStatus(); render();
 });
 controls.run.addEventListener('click', () => {
   if (session.mode === 'run') return;
   session = startExperiment(session);
+  editorTabs.select('unit');
+  controls.width.value = String(session.board.width);
+  controls.height.value = String(session.board.height);
   targeting = false;
   setStatus(); render();
 });
@@ -313,7 +360,12 @@ controls.sizeForm.addEventListener('submit', (event) => {
     setStatus(error instanceof Error ? error.message : '盤面の寸法を確認してください。', true); render();
   }
 });
-controls.tool.addEventListener('change', () => { setStatus(); render(); });
+controls.tools.forEach((button) => button.addEventListener('click', () => {
+  editTool = button.dataset.editTool as EditTool;
+  const unit = session.board.units.find((item) => item.id === selectedId);
+  if (unit !== undefined) cursor = { ...unit.position };
+  setStatus(); render();
+}));
 function rememberCoordinates(): void {
   const x = controls.x.valueAsNumber - 1;
   const y = controls.y.valueAsNumber - 1;
@@ -323,7 +375,7 @@ function rememberCoordinates(): void {
 }
 controls.x.addEventListener('input', rememberCoordinates);
 controls.y.addEventListener('input', rememberCoordinates);
-controls.selected.addEventListener('change', () => selectUnit(Number(controls.selected.value)));
+controls.selected.addEventListener('change', () => selectUnit(Number(controls.selected.value), true));
 controls.selectedType.addEventListener('change', () => {
   if (selectedId !== null) perform({ type: 'set-type', unitId: selectedId, unitType: controls.selectedType.value as UnitType });
 });
@@ -345,9 +397,6 @@ controls.pickTarget.addEventListener('click', () => {
 controls.clearOrder.addEventListener('click', () => {
   if (selectedId !== null) perform({ type: 'order', unitId: selectedId, destination: null });
 });
-controls.remove.addEventListener('click', () => {
-  if (selectedId !== null) perform({ type: 'remove', unitId: selectedId });
-});
 controls.advance.addEventListener('click', () => { targeting = false; perform({ type: 'advance' }); });
 controls.undo.addEventListener('click', () => {
   session = undoTurn(session); targeting = false; setStatus(); render();
@@ -368,6 +417,7 @@ if (import.meta.hot) {
   import.meta.hot.accept();
   import.meta.hot.dispose(() => {
     boardGame?.destroy();
+    editorTabs.destroy();
     shell.destroy();
   });
 }
