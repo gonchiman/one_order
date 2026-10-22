@@ -67,7 +67,7 @@ export interface UnitEvent {
   unitId: number;
   from: Cell;
   to: Cell;
-  reason: 'moved' | 'no-order' | 'arrived' | 'conflict' | 'occupied' | 'cycle';
+  reason: 'moved' | 'no-order' | 'arrived' | 'conflict' | 'occupied' | 'cycle' | 'no-path';
 }
 
 function validDimension(value: number): boolean {
@@ -155,28 +155,55 @@ function resolveCombat(units: Unit[]): { units: Unit[]; events: CombatEvent[] } 
   };
 }
 
-function nextPosition(unit: Unit): Cell {
+function nextPosition(unit: Unit, occupied: ReadonlyMap<string, number>, width: number, height: number): Cell | null {
   const destination = unit.destination;
   if (destination === null || sameCell(unit.position, destination)) {
     return unit.position;
   }
 
-  // 試作用の仮ルール: 横方向を先に進み、揃ってから縦方向へ進む。
-  if (unit.position.x !== destination.x) {
-    return { x: unit.position.x + Math.sign(destination.x - unit.position.x), y: unit.position.y };
+  // 各1マスの移動前に、現在の占有状況から上下左右の最短経路を探す。
+  const queue: { cell: Cell; firstStep: Cell | null }[] = [{ cell: unit.position, firstStep: null }];
+  const visited = new Set([cellKey(unit.position)]);
+  for (let index = 0; index < queue.length; index += 1) {
+    const { cell, firstStep } = queue[index]!;
+    const directions: Cell[] = [
+      { x: Math.sign(destination.x - cell.x), y: 0 },
+      { x: 0, y: Math.sign(destination.y - cell.y) },
+      { x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 },
+    ];
+    for (const direction of directions) {
+      const next = { x: cell.x + direction.x, y: cell.y + direction.y };
+      if (next.x < 0 || next.x >= width || next.y < 0 || next.y >= height) continue;
+      const key = cellKey(next);
+      if (visited.has(key)) continue;
+      // 占有された目的地にも接近できる。最後の進入可否は同時移動の判定に任せる。
+      if (occupied.has(key) && !sameCell(next, destination)) continue;
+      const step = firstStep ?? next;
+      if (sameCell(next, destination)) return step;
+      visited.add(key);
+      queue.push({ cell: next, firstStep: step });
+    }
   }
-  return { x: unit.position.x, y: unit.position.y + Math.sign(destination.y - unit.position.y) };
+  return null;
 }
 
-function moveOneStep(units: Unit[], active: Set<number>): { units: Unit[]; reasons: Map<number, UnitEvent['reason']> } {
+function moveOneStep(units: Unit[], active: Set<number>, width: number, height: number): { units: Unit[]; reasons: Map<number, UnitEvent['reason']> } {
   const occupied = new Map(units.map((unit) => [cellKey(unit.position), unit.id]));
+  // 動こうとしているユニットのマスは後続が利用できる。実際に空くかは同時移動で判定する。
+  const obstacles = new Map(units.filter((unit) => !active.has(unit.id) || unit.destination === null
+    || sameCell(unit.position, unit.destination)).map((unit) => [cellKey(unit.position), unit.id]));
   const candidates = new Map<number, Cell>();
   const targetCounts = new Map<string, number>();
   const moving = new Set<number>();
+  const outcomes = new Map<number, UnitEvent['reason']>();
 
   for (const unit of units) {
     if (!active.has(unit.id)) continue;
-    const candidate = nextPosition(unit);
+    const candidate = nextPosition(unit, obstacles, width, height);
+    if (candidate === null) {
+      outcomes.set(unit.id, 'no-path');
+      continue;
+    }
     candidates.set(unit.id, candidate);
     if (!sameCell(candidate, unit.position)) {
       moving.add(unit.id);
@@ -184,8 +211,6 @@ function moveOneStep(units: Unit[], active: Set<number>): { units: Unit[]; reaso
       targetCounts.set(key, (targetCounts.get(key) ?? 0) + 1);
     }
   }
-
-  const outcomes = new Map<number, UnitEvent['reason']>();
 
   function resolveMove(unitId: number, path: number[]): UnitEvent['reason'] {
     const known = outcomes.get(unitId);
@@ -218,7 +243,7 @@ function moveOneStep(units: Unit[], active: Set<number>): { units: Unit[]; reaso
   const movedUnits = units.map((unit): Unit => {
     if (!active.has(unit.id)) return unit;
     if (!moving.has(unit.id)) {
-      outcomes.set(unit.id, unit.destination === null ? 'no-order' : 'arrived');
+      if (!outcomes.has(unit.id)) outcomes.set(unit.id, unit.destination === null ? 'no-order' : 'arrived');
       return unit;
     }
     if (resolveMove(unit.id, []) !== 'moved') return unit;
@@ -243,7 +268,7 @@ function advanceTurn(state: BoardState): BoardResult {
   for (let step = 0; step < steps; step += 1) {
     const active = new Set(units.filter((unit) => step < unit.moveDistance && !stopped.has(unit.id)).map((unit) => unit.id));
     if (active.size === 0) break;
-    const result = moveOneStep(units, active);
+    const result = moveOneStep(units, active, state.width, state.height);
     units = result.units;
     for (const [unitId, reason] of result.reasons) {
       reasons.set(unitId, reason);
@@ -258,7 +283,7 @@ function advanceTurn(state: BoardState): BoardResult {
     reason: reasons.get(unit.id) ?? 'no-order',
   }));
   const blocked = events.filter((event) => event.reason === 'conflict' || event.reason === 'occupied'
-    || event.reason === 'cycle').map((event) => event.unitId);
+    || event.reason === 'cycle' || event.reason === 'no-path').map((event) => event.unitId);
 
   const combat = resolveCombat(units);
   return success({ ...state, units: combat.units, turn: state.turn + 1, orderedUnitIds: [] }, blocked, events, combat.events);

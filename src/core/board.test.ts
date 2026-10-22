@@ -394,18 +394,18 @@ describe('兵科と個別の移動力', () => {
     expect(result.state.units[0]?.type).toBe('archer');
   });
 
-  it('移動力を使い切った前方ユニットを後続の騎兵が飛び越さない', () => {
+  it('移動力を使い切った前方ユニットを飛び越さず、後続の騎兵が迂回する', () => {
     const units = [
       makeUnit(1, 0, 0, { x: 6, y: 0 }, 2, 'cavalry'),
       makeUnit(2, 1, 0, { x: 6, y: 0 }),
     ];
     const normal = applyAction(scenario(units), { type: 'advance' });
     const reversed = applyAction(scenario(units.slice().reverse()), { type: 'advance' });
-    expect(positions(normal.state)).toEqual({ 1: { x: 1, y: 0 }, 2: { x: 2, y: 0 } });
-    expect(normal.events.map((event) => event.reason)).toEqual(['occupied', 'moved']);
-    expect(normal.blocked).toEqual([1]);
+    expect(positions(normal.state)).toEqual({ 1: { x: 1, y: 1 }, 2: { x: 2, y: 0 } });
+    expect(normal.events.map((event) => event.reason)).toEqual(['moved', 'moved']);
+    expect(normal.blocked).toEqual([]);
     expect(positions(reversed.state)).toEqual(positions(normal.state));
-    expect(Object.fromEntries(reversed.events.map((event) => [event.unitId, event.reason]))).toEqual({ 1: 'occupied', 2: 'moved' });
+    expect(Object.fromEntries(reversed.events.map((event) => [event.unitId, event.reason]))).toEqual({ 1: 'moved', 2: 'moved' });
   });
 
   it('先に到着したユニットの停止位置と到着理由を後の移動段階でも保持する', () => {
@@ -414,8 +414,8 @@ describe('兵科と個別の移動力', () => {
       makeUnit(2, 1, 0, { x: 2, y: 0 }, 3, 'archer'),
     ]);
     const result = applyAction(initial, { type: 'advance' });
-    expect(positions(result.state)).toEqual({ 1: { x: 1, y: 0 }, 2: { x: 2, y: 0 } });
-    expect(result.events.map((event) => event.reason)).toEqual(['occupied', 'arrived']);
+    expect(positions(result.state)).toEqual({ 1: { x: 2, y: 1 }, 2: { x: 2, y: 0 } });
+    expect(result.events.map((event) => event.reason)).toEqual(['moved', 'arrived']);
   });
 
   it('短い移動力の相手と競合して止まった騎兵は、そのターンに再試行しない', () => {
@@ -434,7 +434,7 @@ describe('兵科と個別の移動力', () => {
       makeUnit(1, 0, 0, { x: 6, y: 0 }, 5, 'cavalry'),
       makeUnit(2, 0, 1),
       makeUnit(3, 0, 2, { x: 1, y: 2 }),
-      makeUnit(4, 0, 3, { x: 4, y: 3 }),
+      makeUnit(4, 0, 3, { x: 1, y: 3 }),
       makeUnit(5, 1, 3),
     ]);
     const result = applyAction(initial, { type: 'advance' });
@@ -473,7 +473,7 @@ describe('各ユニットの直前行動と停止理由', () => {
     const initial = scenario([
       makeUnit(1, 1, 1, { x: 2, y: 1 }),
       makeUnit(2, 2, 1, { x: 1, y: 1 }),
-      makeUnit(3, 0, 4, { x: 2, y: 4 }),
+      makeUnit(3, 0, 4, { x: 1, y: 4 }),
       makeUnit(4, 1, 4),
     ]);
     const result = applyAction(initial, { type: 'advance' });
@@ -508,16 +508,16 @@ describe('複数マス移動の通過中判定', () => {
     ]);
   });
 
-  it('途中の停留ユニットを飛び越さず、移動できた範囲と停止理由を返す', () => {
+  it('途中の停留ユニットを飛び越さず、経路を迂回する', () => {
     const initial = {
       ...scenario([makeUnit(1, 0, 0, { x: 4, y: 0 }, 3), makeUnit(2, 2, 0)]),
     };
     const result = applyAction(initial, { type: 'advance' });
-    expect(positions(result.state)).toEqual({ 1: { x: 1, y: 0 }, 2: { x: 2, y: 0 } });
+    expect(positions(result.state)).toEqual({ 1: { x: 2, y: 1 }, 2: { x: 2, y: 0 } });
     expect(result.events[0]).toEqual({
-      unitId: 1, from: { x: 0, y: 0 }, to: { x: 1, y: 0 }, reason: 'occupied',
+      unitId: 1, from: { x: 0, y: 0 }, to: { x: 2, y: 1 }, reason: 'moved',
     });
-    expect(result.blocked).toEqual([1]);
+    expect(result.blocked).toEqual([]);
   });
 
   it('途中の同時進入で競合したユニットを両方停止する', () => {

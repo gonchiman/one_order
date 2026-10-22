@@ -198,6 +198,7 @@ const eventLabels: Record<UnitEvent['reason'], string> = {
   conflict: '移動先が競合して停止',
   occupied: '他のユニットで進めず停止',
   cycle: '入れ替え・循環で停止',
+  'no-path': '目的地への経路なし',
 };
 
 function setStatus(message = '', error = false): void {
@@ -347,7 +348,7 @@ function perform(action: BoardAction): boolean {
   if (action.type === 'add') selectedId = previous.nextId;
   if (action.type === 'advance') {
     const moved = session.events.filter((event) => event.from.x !== event.to.x || event.from.y !== event.to.y).length;
-    const blocked = session.events.filter((event) => ['conflict', 'occupied', 'cycle'].includes(event.reason)).length;
+    const blocked = session.events.filter((event) => ['conflict', 'occupied', 'cycle', 'no-path'].includes(event.reason)).length;
     const attacks = session.combatEvents.length;
     const defeated = new Set(session.combatEvents.filter((event) => event.defeated).map((event) => event.targetId)).size;
     setStatus(`${moved}体移動${blocked > 0 ? `・${blocked}体停止` : ''}・${attacks}回攻撃${defeated > 0 ? `・${defeated}体撃破` : ''}`);
