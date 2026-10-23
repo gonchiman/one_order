@@ -1,4 +1,4 @@
-import { applyAction, createBoard } from './board';
+import { applyAction, createBoard, validateMatchSetup } from './board';
 import type { BoardAction, BoardState, CombatEvent, UnitEvent } from './board';
 
 export interface TurnSnapshot {
@@ -17,7 +17,7 @@ export interface SandboxSession {
 }
 
 function startingBoard(board: BoardState): BoardState {
-  return { ...structuredClone(board), turn: 0, orderedUnitIds: [] };
+  return { ...structuredClone(board), turn: 0, orderedUnitIds: [], outcome: null };
 }
 
 export function createSession(board: BoardState = createBoard()): SandboxSession {
@@ -34,6 +34,8 @@ export function createSession(board: BoardState = createBoard()): SandboxSession
 
 export function startExperiment(session: SandboxSession): SandboxSession {
   const initialBoard = startingBoard(session.board);
+  const error = validateMatchSetup(initialBoard);
+  if (error !== null) throw new RangeError(error);
   return {
     board: structuredClone(initialBoard),
     initialBoard,
@@ -87,7 +89,8 @@ export function actOnSession(
 ): { session: SandboxSession; error: string | null } {
   const editing = action.type === 'add' || action.type === 'move' || action.type === 'remove'
     || action.type === 'set-type' || action.type === 'set-move-distance' || action.type === 'reset-move-distance'
-    || action.type === 'set-side' || action.type === 'set-combat-stat';
+    || action.type === 'set-side' || action.type === 'set-combat-stat' || action.type === 'set-move-priority'
+    || action.type === 'set-wall' || action.type === 'set-goal' || action.type === 'set-match-rules';
   if (editing && session.mode !== 'edit') {
     return { session, error: '配置を変更するには「配置編集」に切り替えてください。' };
   }

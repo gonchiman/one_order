@@ -8,7 +8,7 @@ import { actOnSession, createSession, startExperiment, undoTurn } from './sessio
 function unit(id: number, x: number, y: number, destination: Cell | null = null, overrides: Partial<Unit> = {}): Unit {
   const preset = UNIT_TYPES.infantry;
   return { id, side: 'ally', type: 'infantry', position: { x, y }, destination,
-    moveDistance: preset.moveDistance, hp: preset.maxHp, maxHp: preset.maxHp,
+    moveDistance: preset.moveDistance, movePriority: preset.movePriority, hp: preset.maxHp, maxHp: preset.maxHp,
     attack: preset.attack, attackRange: preset.attackRange, ...overrides };
 }
 

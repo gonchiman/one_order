@@ -1,4 +1,4 @@
-import { COMBAT_STAT_LIMITS, isUnitSide, isUnitType, MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_TYPES } from './unitTypes';
+import { COMBAT_STAT_LIMITS, isUnitSide, isUnitType, MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, MAX_MOVE_PRIORITY, MIN_MOVE_PRIORITY, UNIT_TYPES } from './unitTypes';
 import type { CombatStat, UnitSide, UnitType } from './unitTypes';
 
 export interface Cell {
@@ -11,6 +11,7 @@ export interface Unit {
   type: UnitType;
   side: UnitSide;
   moveDistance: number;
+  movePriority: number;
   hp: number;
   maxHp: number;
   attack: number;
@@ -21,10 +22,20 @@ export interface Unit {
 
 export interface BoardRules {
   orderLimit: number;
+  matchEnabled: boolean;
+  firstPrioritySide: UnitSide;
+  turnLimit: number;
 }
 
-export const DEFAULT_RULES: BoardRules = Object.freeze({ orderLimit: 1 });
+export const MIN_TURN_LIMIT = 1;
+export const MAX_TURN_LIMIT = 999;
+export const DEFAULT_RULES: BoardRules = Object.freeze({ orderLimit: 1, matchEnabled: false, firstPrioritySide: 'ally', turnLimit: 50 });
 export const DEFAULT_BOARD_SIZE = 9;
+
+export interface MatchOutcome {
+  winner: UnitSide | null;
+  reason: 'goal' | 'elimination' | 'simultaneous' | 'turn-limit';
+}
 
 export interface BoardState {
   width: number;
@@ -34,6 +45,9 @@ export interface BoardState {
   nextId: number;
   orderedUnitIds: number[];
   rules: BoardRules;
+  walls: Cell[];
+  goals: Record<UnitSide, Cell | null>;
+  outcome: MatchOutcome | null;
 }
 
 export type BoardAction =
@@ -44,7 +58,11 @@ export type BoardAction =
   | { type: 'set-side'; unitId: number; side: UnitSide }
   | { type: 'set-combat-stat'; unitId: number; stat: CombatStat; value: number }
   | { type: 'set-move-distance'; unitId: number; moveDistance: number }
+  | { type: 'set-move-priority'; unitId: number; movePriority: number }
   | { type: 'reset-move-distance'; unitId: number }
+  | { type: 'set-wall'; position: Cell; blocked: boolean }
+  | { type: 'set-goal'; side: UnitSide; position: Cell | null }
+  | { type: 'set-match-rules'; matchEnabled?: boolean; firstPrioritySide?: UnitSide; turnLimit?: number }
   | { type: 'order'; unitId: number; destination: Cell | null }
   | { type: 'advance' };
 
@@ -74,13 +92,25 @@ function validDimension(value: number): boolean {
   return Number.isInteger(value) && value >= 3 && value <= 12;
 }
 
-export function createBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_SIZE, rules: BoardRules = DEFAULT_RULES): BoardState {
+function validateRules(rules: BoardRules): string | null {
+  if (!Number.isInteger(rules.orderLimit) || rules.orderLimit < 1 || rules.orderLimit > 144) {
+    return '指示できるユニットの数は1〜144の整数で指定してください。';
+  }
+  if (typeof rules.matchEnabled !== 'boolean') return '対戦の有効・無効を選んでください。';
+  if (!isUnitSide(rules.firstPrioritySide)) return '最初に優先するプレイヤーを選んでください。';
+  if (!Number.isInteger(rules.turnLimit) || rules.turnLimit < MIN_TURN_LIMIT || rules.turnLimit > MAX_TURN_LIMIT) {
+    return `ターン上限は${MIN_TURN_LIMIT}〜${MAX_TURN_LIMIT}の整数で指定してください。`;
+  }
+  return null;
+}
+
+export function createBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_SIZE, rules: Partial<BoardRules> = DEFAULT_RULES): BoardState {
   if (!validDimension(width) || !validDimension(height)) {
     throw new RangeError('盤面の幅と高さは3〜12の整数で指定してください。');
   }
-  if (!Number.isInteger(rules.orderLimit) || rules.orderLimit < 1 || rules.orderLimit > 144) {
-    throw new RangeError('指示できるユニットの数は1〜144の整数で指定してください。');
-  }
+  const mergedRules = { ...DEFAULT_RULES, ...rules };
+  const rulesError = validateRules(mergedRules);
+  if (rulesError !== null) throw new RangeError(rulesError);
 
   return {
     width,
@@ -92,12 +122,15 @@ export function createBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_S
     ],
     nextId: 3,
     orderedUnitIds: [],
-    rules: { ...rules },
+    rules: mergedRules,
+    walls: [],
+    goals: { ally: null, enemy: null },
+    outcome: null,
   };
 }
 
 function validCell(state: BoardState, cell: Cell): boolean {
-  return Number.isInteger(cell.x) && Number.isInteger(cell.y)
+  return cell !== null && typeof cell === 'object' && Number.isInteger(cell.x) && Number.isInteger(cell.y)
     && cell.x >= 0 && cell.x < state.width
     && cell.y >= 0 && cell.y < state.height;
 }
@@ -110,10 +143,37 @@ function cellKey(cell: Cell): string {
   return `${cell.x},${cell.y}`;
 }
 
+function isWall(state: BoardState, cell: Cell): boolean {
+  return state.walls.some((wall) => sameCell(wall, cell));
+}
+
+function oppositeSide(side: UnitSide): UnitSide {
+  return side === 'ally' ? 'enemy' : 'ally';
+}
+
+// turnは完了済みターン数。次に解決するターンの優先権を返す。
+export function prioritySideForTurn(state: BoardState): UnitSide {
+  return state.turn % 2 === 0 ? state.rules.firstPrioritySide : oppositeSide(state.rules.firstPrioritySide);
+}
+
+export function validateMatchSetup(state: BoardState): string | null {
+  if (!state.rules.matchEnabled) return null;
+  for (const side of ['ally', 'enemy'] as const) {
+    if (!state.units.some((unit) => unit.side === side && unit.hp > 0)) {
+      return '両プレイヤーのユニットを1体以上配置してください。';
+    }
+  }
+  const { ally, enemy } = state.goals;
+  if (ally === null || enemy === null) return '両プレイヤーの陣地を配置してください。';
+  if (!validCell(state, ally) || !validCell(state, enemy) || sameCell(ally, enemy)
+    || isWall(state, ally) || isWall(state, enemy)) return '陣地は壁のない別々のマスに配置してください。';
+  return null;
+}
+
 function createUnit(id: number, type: UnitType, side: UnitSide, position: Cell): Unit {
   const preset = UNIT_TYPES[type];
   return {
-    id, type, side, moveDistance: preset.moveDistance,
+    id, type, side, moveDistance: preset.moveDistance, movePriority: preset.movePriority,
     hp: preset.maxHp, maxHp: preset.maxHp, attack: preset.attack, attackRange: preset.attackRange,
     position: { ...position }, destination: null,
   };
@@ -155,7 +215,7 @@ function resolveCombat(units: Unit[]): { units: Unit[]; events: CombatEvent[] } 
   };
 }
 
-function nextPosition(unit: Unit, occupied: ReadonlyMap<string, number>, width: number, height: number): Cell | null {
+function nextPosition(unit: Unit, occupied: ReadonlyMap<string, number>, walls: ReadonlySet<string>, width: number, height: number): Cell | null {
   const destination = unit.destination;
   if (destination === null || sameCell(unit.position, destination)) {
     return unit.position;
@@ -175,7 +235,7 @@ function nextPosition(unit: Unit, occupied: ReadonlyMap<string, number>, width: 
       const next = { x: cell.x + direction.x, y: cell.y + direction.y };
       if (next.x < 0 || next.x >= width || next.y < 0 || next.y >= height) continue;
       const key = cellKey(next);
-      if (visited.has(key)) continue;
+      if (visited.has(key) || walls.has(key)) continue;
       // 占有された目的地にも接近できる。最後の進入可否は同時移動の判定に任せる。
       if (occupied.has(key) && !sameCell(next, destination)) continue;
       const step = firstStep ?? next;
@@ -187,19 +247,28 @@ function nextPosition(unit: Unit, occupied: ReadonlyMap<string, number>, width: 
   return null;
 }
 
-function moveOneStep(units: Unit[], active: Set<number>, width: number, height: number): { units: Unit[]; reasons: Map<number, UnitEvent['reason']> } {
+function moveOneStep(units: Unit[], active: Set<number>, state: BoardState): { units: Unit[]; reasons: Map<number, UnitEvent['reason']> } {
   const occupied = new Map(units.map((unit) => [cellKey(unit.position), unit.id]));
   // 動こうとしているユニットのマスは後続が利用できる。実際に空くかは同時移動で判定する。
   const obstacles = new Map(units.filter((unit) => !active.has(unit.id) || unit.destination === null
     || sameCell(unit.position, unit.destination)).map((unit) => [cellKey(unit.position), unit.id]));
   const candidates = new Map<number, Cell>();
-  const targetCounts = new Map<string, number>();
+  const contenders = new Map<string, Unit[]>();
   const moving = new Set<number>();
   const outcomes = new Map<number, UnitEvent['reason']>();
+  const walls = new Set(state.walls.map(cellKey));
+  const prioritySide = prioritySideForTurn(state);
+  const ranks = new Map<number, number>();
+  for (const side of ['ally', 'enemy'] as const) {
+    const sideUnits = units.filter((unit) => unit.side === side && unit.hp > 0).sort((a, b) => a.id - b.id);
+    for (let rank = 0; rank < sideUnits.length; rank += 1) {
+      ranks.set(sideUnits[(state.turn + rank) % sideUnits.length]!.id, rank);
+    }
+  }
 
   for (const unit of units) {
     if (!active.has(unit.id)) continue;
-    const candidate = nextPosition(unit, obstacles, width, height);
+    const candidate = nextPosition(unit, obstacles, walls, state.width, state.height);
     if (candidate === null) {
       outcomes.set(unit.id, 'no-path');
       continue;
@@ -208,8 +277,19 @@ function moveOneStep(units: Unit[], active: Set<number>, width: number, height: 
     if (!sameCell(candidate, unit.position)) {
       moving.add(unit.id);
       const key = cellKey(candidate);
-      targetCounts.set(key, (targetCounts.get(key) ?? 0) + 1);
+      const group = contenders.get(key) ?? [];
+      group.push(unit);
+      contenders.set(key, group);
     }
+  }
+
+  // 同じマスを狙う場合、能力値・プレイヤーの優先権・自軍内の持ち回りの順で1体に絞る。
+  // 勝者も進入先の占有チェックを通すため、進めないユニットを押し出すことはない。
+  for (const group of contenders.values()) {
+    group.sort((a, b) => b.movePriority - a.movePriority
+      || Number(b.side === prioritySide) - Number(a.side === prioritySide)
+      || (ranks.get(a.id) ?? 0) - (ranks.get(b.id) ?? 0));
+    for (const loser of group.slice(1)) outcomes.set(loser.id, 'conflict');
   }
 
   function resolveMove(unitId: number, path: number[]): UnitEvent['reason'] {
@@ -225,11 +305,6 @@ function moveOneStep(units: Unit[], active: Set<number>, width: number, height: 
     const candidate = candidates.get(unitId);
     if (candidate === undefined) return 'occupied';
     const targetKey = cellKey(candidate);
-    if ((targetCounts.get(targetKey) ?? 0) > 1) {
-      outcomes.set(unitId, 'conflict');
-      return 'conflict';
-    }
-
     const occupantId = occupied.get(targetKey);
     const nextReason = occupantId === undefined ? 'moved'
       : !moving.has(occupantId) ? 'occupied'
@@ -268,7 +343,7 @@ function advanceTurn(state: BoardState): BoardResult {
   for (let step = 0; step < steps; step += 1) {
     const active = new Set(units.filter((unit) => step < unit.moveDistance && !stopped.has(unit.id)).map((unit) => unit.id));
     if (active.size === 0) break;
-    const result = moveOneStep(units, active, state.width, state.height);
+    const result = moveOneStep(units, active, state);
     units = result.units;
     for (const [unitId, reason] of result.reasons) {
       reasons.set(unitId, reason);
@@ -286,11 +361,67 @@ function advanceTurn(state: BoardState): BoardResult {
     || event.reason === 'cycle' || event.reason === 'no-path').map((event) => event.unitId);
 
   const combat = resolveCombat(units);
-  return success({ ...state, units: combat.units, turn: state.turn + 1, orderedUnitIds: [] }, blocked, events, combat.events);
+  const next = { ...state, units: combat.units, turn: state.turn + 1, orderedUnitIds: [] };
+  next.outcome = matchOutcome(next);
+  return success(next, blocked, events, combat.events);
+}
+
+function matchOutcome(state: BoardState): MatchOutcome | null {
+  if (!state.rules.matchEnabled) return null;
+  const victory = (side: UnitSide): 'goal' | 'elimination' | null => {
+    const opponent = oppositeSide(side);
+    const goal = state.goals[opponent];
+    if (goal !== null && state.units.some((unit) => unit.side === side && unit.hp > 0 && sameCell(unit.position, goal))) {
+      return 'goal';
+    }
+    return state.units.some((unit) => unit.side === opponent && unit.hp > 0) ? null : 'elimination';
+  };
+  const ally = victory('ally');
+  const enemy = victory('enemy');
+  if (ally !== null && enemy !== null) return { winner: null, reason: 'simultaneous' };
+  if (ally !== null) return { winner: 'ally', reason: ally };
+  if (enemy !== null) return { winner: 'enemy', reason: enemy };
+  if (state.turn >= state.rules.turnLimit) return { winner: null, reason: 'turn-limit' };
+  return null;
 }
 
 export function applyAction(state: BoardState, action: BoardAction): BoardResult {
+  if (state.outcome !== null && (action.type === 'advance' || action.type === 'order')) {
+    return failure(state, '試合は終了しています。');
+  }
   if (action.type === 'advance') return advanceTurn(state);
+
+  if (action.type === 'set-match-rules') {
+    const rules = { ...state.rules };
+    for (const key of ['matchEnabled', 'firstPrioritySide', 'turnLimit'] as const) {
+      if (Object.hasOwn(action, key)) Object.assign(rules, { [key]: action[key] });
+    }
+    const error = validateRules(rules);
+    return error === null ? success({ ...state, rules }) : failure(state, error);
+  }
+
+  if (action.type === 'set-wall') {
+    if (!validCell(state, action.position)) return failure(state, '盤面内のマスを選んでください。');
+    if (typeof action.blocked !== 'boolean') return failure(state, '壁の有無を指定してください。');
+    if (action.blocked && (state.units.some((unit) => sameCell(unit.position, action.position))
+      || Object.values(state.goals).some((goal) => goal !== null && sameCell(goal, action.position)))) {
+      return failure(state, 'ユニットや陣地のあるマスには壁を置けません。');
+    }
+    const walls = state.walls.filter((wall) => !sameCell(wall, action.position));
+    if (action.blocked) walls.push({ ...action.position });
+    return success({ ...state, walls });
+  }
+
+  if (action.type === 'set-goal') {
+    if (!isUnitSide(action.side)) return failure(state, '陣地のプレイヤーを選んでください。');
+    if (action.position !== null) {
+      if (!validCell(state, action.position)) return failure(state, '盤面内のマスを選んでください。');
+      if (isWall(state, action.position)) return failure(state, '壁のあるマスには陣地を置けません。');
+      const otherGoal = state.goals[oppositeSide(action.side)];
+      if (otherGoal !== null && sameCell(otherGoal, action.position)) return failure(state, '陣地は別々のマスに配置してください。');
+    }
+    return success({ ...state, goals: { ...state.goals, [action.side]: action.position === null ? null : { ...action.position } } });
+  }
 
   if (action.type === 'add') {
     const unitType = action.unitType ?? 'infantry';
@@ -298,6 +429,7 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
     if (!isUnitType(unitType)) return failure(state, '兵科を選んでください。');
     if (!isUnitSide(side)) return failure(state, '陣営を選んでください。');
     if (!validCell(state, action.position)) return failure(state, '盤面内のマスを選んでください。');
+    if (isWall(state, action.position)) return failure(state, '壁のあるマスには配置できません。');
     if (state.units.some((unit) => sameCell(unit.position, action.position))) {
       return failure(state, 'そのマスにはユニットがあります。');
     }
@@ -317,7 +449,7 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
     return success({
       ...state,
       units: state.units.map((item) => item.id === unit.id
-        ? { ...item, type: action.unitType, moveDistance: preset.moveDistance,
+        ? { ...item, type: action.unitType, moveDistance: preset.moveDistance, movePriority: preset.movePriority,
           hp: preset.maxHp, maxHp: preset.maxHp, attack: preset.attack, attackRange: preset.attackRange }
         : item),
     });
@@ -353,6 +485,13 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
     });
   }
 
+  if (action.type === 'set-move-priority') {
+    if (!Number.isInteger(action.movePriority) || action.movePriority < MIN_MOVE_PRIORITY || action.movePriority > MAX_MOVE_PRIORITY) {
+      return failure(state, `移動優先度は${MIN_MOVE_PRIORITY}〜${MAX_MOVE_PRIORITY}の整数で指定してください。`);
+    }
+    return success({ ...state, units: state.units.map((item) => item.id === unit.id ? { ...item, movePriority: action.movePriority } : item) });
+  }
+
   if (action.type === 'remove') {
     return success({
       ...state,
@@ -363,6 +502,7 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
 
   if (action.type === 'move') {
     if (!validCell(state, action.position)) return failure(state, '盤面内のマスを選んでください。');
+    if (isWall(state, action.position)) return failure(state, '壁のあるマスには配置できません。');
     if (state.units.some((item) => item.id !== unit.id && sameCell(item.position, action.position))) {
       return failure(state, 'そのマスにはユニットがあります。');
     }
@@ -375,6 +515,7 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
   if (action.destination !== null && !validCell(state, action.destination)) {
     return failure(state, '目的地は盤面内のマスを選んでください。');
   }
+  if (action.destination !== null && isWall(state, action.destination)) return failure(state, '壁のあるマスは目的地にできません。');
   const alreadyOrdered = state.orderedUnitIds.includes(unit.id);
   const sideOrderCount = state.units.filter((item) => item.side === unit.side && state.orderedUnitIds.includes(item.id)).length;
   if (!alreadyOrdered && sideOrderCount >= state.rules.orderLimit) {

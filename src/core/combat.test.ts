@@ -7,7 +7,7 @@ import type { CombatStat, UnitSide, UnitType } from './unitTypes';
 function unit(id: number, side: UnitSide, x: number, y: number, overrides: Partial<Unit> = {}): Unit {
   const preset = UNIT_TYPES.infantry;
   return { id, side, type: 'infantry', position: { x, y }, destination: null,
-    moveDistance: preset.moveDistance, hp: preset.maxHp, maxHp: preset.maxHp,
+    moveDistance: preset.moveDistance, movePriority: preset.movePriority, hp: preset.maxHp, maxHp: preset.maxHp,
     attack: preset.attack, attackRange: preset.attackRange, ...overrides };
 }
 
@@ -33,7 +33,7 @@ describe('敵味方の編集と陣営別の指示', () => {
     const result = applyAction(createBoard(), { type: 'add', position: { x: 4, y: 1 }, side: 'enemy', unitType });
     expect(result.error).toBeNull();
     expect(result.state.units.at(-1)).toEqual({ id: 3, side: 'enemy', type: unitType,
-      position: { x: 4, y: 1 }, destination: null, moveDistance: preset.moveDistance,
+      position: { x: 4, y: 1 }, destination: null, moveDistance: preset.moveDistance, movePriority: preset.movePriority,
       hp: preset.maxHp, maxHp: preset.maxHp, attack: preset.attack, attackRange: preset.attackRange });
   });
 

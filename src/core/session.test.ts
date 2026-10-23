@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createBoard } from './board';
+import { createBoard, prioritySideForTurn } from './board';
 import type { BoardAction, BoardState, UnitEvent } from './board';
 import { UNIT_TYPES } from './unitTypes';
 import {
@@ -11,6 +11,7 @@ import {
   undoTurn,
 } from './session';
 import type { SandboxSession } from './session';
+import { createMatchScenario } from './scenario';
 
 function act(session: SandboxSession, action: BoardAction): SandboxSession {
   const result = actOnSession(session, action);
@@ -198,6 +199,10 @@ describe('編集と実験の操作範囲', () => {
       { type: 'set-combat-stat', unitId: 1, stat: 'maxHp', value: 7 },
       { type: 'set-combat-stat', unitId: 1, stat: 'attack', value: 3 },
       { type: 'set-combat-stat', unitId: 1, stat: 'attackRange', value: 2 },
+      { type: 'set-move-priority', unitId: 1, movePriority: 3 },
+      { type: 'set-wall', position: { x: 2, y: 2 }, blocked: true },
+      { type: 'set-goal', side: 'ally', position: { x: 4, y: 4 } },
+      { type: 'set-match-rules', firstPrioritySide: 'enemy', turnLimit: 40 },
     ];
     for (const action of editActions) {
       const denied = actOnSession(running, action);
@@ -238,6 +243,104 @@ describe('編集と実験の操作範囲', () => {
     expect(editing).toEqual(before);
     expect(ordered.board.orderedUnitIds).toEqual([1]);
     expect(advanced.history[0]?.board).toEqual(ordered.board);
+  });
+});
+
+describe('対戦の終了・復元・再戦', () => {
+  function beforeGoal(): SandboxSession {
+    let session = createSession(createMatchScenario());
+    for (const unitId of [2, 3, 5, 6]) session = act(session, { type: 'remove', unitId });
+    session = act(session, { type: 'move', unitId: 1, position: { x: 4, y: 1 } });
+    session = act(session, { type: 'move', unitId: 4, position: { x: 0, y: 0 } });
+    session = act(session, { type: 'set-move-priority', unitId: 1, movePriority: 3 });
+    session = act(session, { type: 'set-match-rules', firstPrioritySide: 'enemy' });
+    return startExperiment(session);
+  }
+
+  it('不完全な対戦配置の開始を拒否し、実験モードは引き続き開始できる', () => {
+    const board = createMatchScenario();
+    board.goals.enemy = null;
+    const invalid = freeze(createSession(board));
+    expect(() => startExperiment(invalid)).toThrow(RangeError);
+    expect(invalid.mode).toBe('edit');
+    expect(invalid.board.turn).toBe(0);
+    const disabled = act(invalid, { type: 'set-match-rules', matchEnabled: false });
+    expect(startExperiment(disabled).mode).toBe('run');
+    expect(() => startExperiment(createSession())).not.toThrow();
+  });
+
+  it('拠点到達で終了した対戦をundoすると指示・優先側・地形まで復元し、同じ結果を再現する', () => {
+    const started = beforeGoal();
+    const ordered = act(started, { type: 'order', unitId: 1, destination: { x: 4, y: 0 } });
+    expect(prioritySideForTurn(ordered.board)).toBe('enemy');
+    const ended = act(freeze(ordered), { type: 'advance' });
+    expect(ended.board.outcome).toEqual({ winner: 'ally', reason: 'goal' });
+    expect(ended.history).toHaveLength(1);
+    for (const action of [{ type: 'advance' }, { type: 'order', unitId: 4, destination: { x: 1, y: 0 } }] as BoardAction[]) {
+      const denied = actOnSession(ended, action);
+      expect(denied.error).not.toBeNull();
+      expect(denied.session).toBe(ended);
+      expect(denied.session.history).toHaveLength(1);
+    }
+    const restored = undoTurn(freeze(ended));
+    expect(restored.board).toEqual(ordered.board);
+    expect(restored.board.outcome).toBeNull();
+    expect(restored.board.orderedUnitIds).toEqual([1]);
+    expect(prioritySideForTurn(restored.board)).toBe('enemy');
+    expect(act(restored, { type: 'advance' })).toEqual(ended);
+
+    restored.board.walls[0]!.x = 0;
+    restored.board.goals.enemy!.x = 0;
+    restored.board.units[0]!.movePriority = 9;
+    expect(ended.history[0]?.board).toEqual(ordered.board);
+    expect(ended.initialBoard).toEqual(started.initialBoard);
+  });
+
+  it('終了後の再戦で開始配置のHP・拠点・地形・先行側を復元する', () => {
+    const started = beforeGoal();
+    const ordered = act(started, { type: 'order', unitId: 1, destination: { x: 4, y: 0 } });
+    const ended = act(ordered, { type: 'advance' });
+    const reset = resetExperiment(freeze(ended));
+    expect(reset).toEqual(started);
+    expect(reset.board.outcome).toBeNull();
+    expect(reset.board.units.every((unit) => unit.hp === unit.maxHp)).toBe(true);
+    expect(prioritySideForTurn(reset.board)).toBe('enemy');
+    expect(act(reset, { type: 'advance' }).board.outcome).toBeNull();
+    reset.board.walls[0]!.y = 0;
+    reset.board.goals.ally!.x = 0;
+    expect(resetExperiment(reset)).toEqual(started);
+  });
+
+  it('編集・新規セッション・再開は終了判定とターンを初期化する', () => {
+    const ordered = act(beforeGoal(), { type: 'order', unitId: 1, destination: { x: 4, y: 0 } });
+    const ended = act(ordered, { type: 'advance' });
+    const editing = editExperiment(freeze(ended));
+    expect(editing.mode).toBe('edit');
+    expect(editing.board).toMatchObject({ turn: 0, outcome: null, orderedUnitIds: [] });
+    expect(editing.board.units.every((unit) => unit.destination === null)).toBe(true);
+    expect(editing.board.walls).toEqual(ended.board.walls);
+    expect(editing.board.goals).toEqual(ended.board.goals);
+    expect(editing.initialBoard).toEqual(ended.initialBoard);
+    expect(createSession(ended.board).board.outcome).toBeNull();
+    // 勝者が相手拠点にいる配置を修正してから、再び対戦を始める。
+    const repositioned = act(editing, { type: 'move', unitId: 1, position: { x: 4, y: 1 } });
+    const restarted = startExperiment(repositioned);
+    expect(restarted.board).toMatchObject({ turn: 0, outcome: null, orderedUnitIds: [] });
+    expect(restarted.history).toEqual([]);
+    expect(restarted.events).toEqual([]);
+    expect(restarted.combatEvents).toEqual([]);
+  });
+
+  it('上限ターンの引き分けを戻すと優先側と残りターンを復元する', () => {
+    const editing = act(createSession(createMatchScenario()), { type: 'set-match-rules', turnLimit: 2 });
+    const started = startExperiment(editing);
+    const first = act(started, { type: 'advance' });
+    expect(first.board.outcome).toBeNull();
+    expect(prioritySideForTurn(first.board)).toBe('enemy');
+    const ended = act(first, { type: 'advance' });
+    expect(ended.board.outcome).toEqual({ winner: null, reason: 'turn-limit' });
+    expect(undoTurn(ended)).toEqual(first);
+    expect(resetExperiment(ended)).toEqual(started);
   });
 });
 

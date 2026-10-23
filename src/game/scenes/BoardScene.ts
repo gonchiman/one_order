@@ -111,13 +111,31 @@ export class BoardScene extends Phaser.Scene {
     const y = 30 + (availableHeight - height) / 2;
     this.geometry = { x, y, cellSize };
 
+    const wallKeys = new Set(board.walls.map((cell) => `${cell.x},${cell.y}`));
+    for (const wall of board.walls) {
+      const wallX = x + wall.x * cellSize + 1;
+      const wallY = y + wall.y * cellSize + 1;
+      const size = Math.max(0, cellSize - 2);
+      graphics.fillStyle(0xe5e5e5, 1);
+      graphics.fillRect(wallX, wallY, size, size);
+      graphics.lineStyle(1, 0xc5c5c5, 1);
+      for (let offset = -size; offset < size; offset += 8) {
+        const startX = Math.max(0, offset);
+        const startY = Math.max(0, -offset);
+        const endX = Math.min(size, size + offset);
+        const endY = Math.min(size, size - offset);
+        graphics.lineBetween(wallX + startX, wallY + startY, wallX + endX, wallY + endY);
+        graphics.lineBetween(wallX + startX, wallY + size - startY, wallX + endX, wallY + size - endY);
+      }
+    }
+
     const selected = board.units.find((unit) => unit.id === selectedUnitId);
     if (selected !== undefined) {
       graphics.fillStyle(SIDE_COLORS[selected.side], 0.06);
       for (let row = 0; row < board.height; row += 1) {
         for (let column = 0; column < board.width; column += 1) {
           const distance = Math.abs(column - selected.position.x) + Math.abs(row - selected.position.y);
-          if (distance > 0 && distance <= selected.attackRange) {
+          if (distance > 0 && distance <= selected.attackRange && !wallKeys.has(`${column},${row}`)) {
             graphics.fillRect(x + column * cellSize, y + row * cellSize, cellSize, cellSize);
           }
         }
@@ -138,6 +156,29 @@ export class BoardScene extends Phaser.Scene {
       if (row < board.height) this.text(x - 16, lineY + cellSize / 2, String(row + 1), 12, '#555555');
     }
 
+    const goalKeys = new Set<string>();
+    const goalLabelBottoms = new Map<string, number>();
+    for (const side of ['ally', 'enemy'] as const) {
+      const goal = board.goals[side];
+      if (goal === null) continue;
+      goalKeys.add(`${goal.x},${goal.y}`);
+      const goalX = x + goal.x * cellSize;
+      const goalY = y + goal.y * cellSize;
+      const name = side === 'ally' ? 'P1' : 'P2';
+      graphics.lineStyle(2, SIDE_COLORS[side], 1);
+      graphics.strokeRect(goalX + 2, goalY + 2, Math.max(0, cellSize - 4), Math.max(0, cellSize - 4));
+      const label = this.text(
+        goalX + 4,
+        goalY + Math.max(3, cellSize * 0.04),
+        smallCell ? name : `${name}陣地`,
+        smallCell ? 9 : 10,
+        `#${SIDE_COLORS[side].toString(16).padStart(6, '0')}`,
+      ).setOrigin(0, 0);
+      if (label.width > cellSize - 8) label.setText(name);
+      if (label.width > cellSize - 8) label.setVisible(false);
+      if (label.visible) goalLabelBottoms.set(`${goal.x},${goal.y}`, label.y - goalY + label.height + 2);
+    }
+
     const destinations = new Map<string, { cell: Cell; unitIds: number[] }>();
     for (const unit of board.units) {
       if (unit.destination === null) continue;
@@ -153,7 +194,9 @@ export class BoardScene extends Phaser.Scene {
       this.dashedRectangle(cellX + inset, cellY + inset, cellSize - inset * 2, cellSize - inset * 2);
       const names = unitIds.map(unitLabel).join('・');
       const occupied = board.units.some((unit) => unit.position.x === cell.x && unit.position.y === cell.y);
-      if (occupied && smallCell) continue;
+      // 陣地名とユニットが同居するマスでは、目的地は破線だけで示す。
+      const baseHere = goalKeys.has(`${cell.x},${cell.y}`);
+      if ((occupied && (smallCell || baseHere)) || (baseHere && smallCell)) continue;
       const label = this.text(
         cellX + cellSize / 2,
         cellY + cellSize * (occupied ? 0.14 : 0.5),
@@ -168,11 +211,17 @@ export class BoardScene extends Phaser.Scene {
     }
 
     for (const unit of board.units) {
-      const goalHere = destinations.has(`${unit.position.x},${unit.position.y}`);
-      const shiftForGoal = goalHere && !smallCell;
+      const key = `${unit.position.x},${unit.position.y}`;
+      const baseHere = goalKeys.has(key);
+      const shiftForGoal = (destinations.has(key) || baseHere) && !smallCell;
       const centerX = x + (unit.position.x + 0.5) * cellSize;
-      const centerY = y + (unit.position.y + (smallCell ? 0.5 : shiftForGoal ? 0.51 : 0.44)) * cellSize;
-      const radius = cellSize * (smallCell ? 0.43 : shiftForGoal ? 0.2 : 0.27);
+      const headerHeight = smallCell && baseHere ? goalLabelBottoms.get(key) ?? 0 : 0;
+      const markerHeight = Math.max(1, cellSize - headerHeight - 3);
+      const centerOffsetY = smallCell && baseHere ? headerHeight + markerHeight / 2
+        : cellSize * (smallCell ? 0.5 : shiftForGoal ? 0.51 : 0.44);
+      const centerY = y + unit.position.y * cellSize + centerOffsetY;
+      const radius = smallCell && baseHere ? Math.min(cellSize * 0.3, markerHeight / 2)
+        : cellSize * (smallCell ? 0.43 : shiftForGoal ? 0.2 : 0.27);
       const isSelected = unit.id === selectedUnitId;
       const sideColor = SIDE_COLORS[unit.side];
       graphics.fillStyle(isSelected ? sideColor : 0xffffff, 1);
@@ -196,8 +245,24 @@ export class BoardScene extends Phaser.Scene {
     }
 
     const selectedDescription = selected === undefined ? '選択なし'
-      : `選択中のユニット ${unitLabel(selected.id)} ${UNIT_SIDES[selected.side].name} ${UNIT_TYPES[selected.type].name}、HP${selected.hp}/${selected.maxHp}、攻撃力${selected.attack}、射程${selected.attackRange}マス、移動力${selected.moveDistance}マス`;
-    this.game.canvas.setAttribute('aria-label', `${board.width}列${board.height}行の盤面、ユニット${board.units.length}体、ターン${board.turn}、${selectedDescription}`);
+      : `選択中のユニット ${unitLabel(selected.id)} ${UNIT_SIDES[selected.side].name} ${UNIT_TYPES[selected.type].name}、HP${selected.hp}/${selected.maxHp}、攻撃力${selected.attack}、射程${selected.attackRange}マス、移動力${selected.moveDistance}マス、移動優先度${selected.movePriority}`;
+    const coordinates = (cell: Cell): string => `(${cell.x + 1},${cell.y + 1})`;
+    const goalsDescription = (['ally', 'enemy'] as const).map((side) => {
+      const goal = board.goals[side];
+      return `${side === 'ally' ? 'P1' : 'P2'}陣地${goal === null ? 'なし' : coordinates(goal)}`;
+    }).join('、');
+    const wallsDescription = board.walls.length === 0 ? '壁なし' : `壁${board.walls.map(coordinates).join('・')}`;
+    const destinationsDescription = board.units.filter((unit) => unit.destination !== null)
+      .map((unit) => `${unitLabel(unit.id)}の目的地${coordinates(unit.destination!)}`).join('、');
+    const outcomeReasons = { goal: '陣地占領', elimination: '全滅', simultaneous: '同時決着', 'turn-limit': 'ターン上限' };
+    const winnerDescription = board.outcome?.winner === 'ally' ? 'P1の勝利'
+      : board.outcome?.winner === 'enemy' ? 'P2の勝利' : '引き分け';
+    const outcomeDescription = board.outcome === null ? ''
+      : `${winnerDescription}、${outcomeReasons[board.outcome.reason]}`;
+    this.game.canvas.setAttribute('aria-label', [
+      `${board.width}列${board.height}行の盤面、ユニット${board.units.length}体、ターン${board.turn}`,
+      selectedDescription, goalsDescription, wallsDescription, destinationsDescription, outcomeDescription,
+    ].filter(Boolean).join('、'));
     this.game.canvas.style.cursor = this.view.targeting ? 'crosshair' : 'default';
   }
 }

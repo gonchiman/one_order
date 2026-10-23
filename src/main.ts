@@ -1,9 +1,10 @@
 import './style.css';
 import { createGame } from './game/createGame';
-import { applyAction, createBoard, DEFAULT_BOARD_SIZE } from './core/board';
-import type { BoardAction, BoardState, Cell, UnitEvent } from './core/board';
+import { DEFAULT_BOARD_SIZE, MIN_TURN_LIMIT, MAX_TURN_LIMIT, prioritySideForTurn, validateMatchSetup } from './core/board';
+import type { BoardAction, Cell, UnitEvent } from './core/board';
+import { createMatchScenario } from './core/scenario';
 import { unitLabel } from './core/labels';
-import { COMBAT_STAT_LIMITS, MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, UNIT_SIDES, UNIT_TYPES } from './core/unitTypes';
+import { COMBAT_STAT_LIMITS, MAX_MOVE_DISTANCE, MIN_MOVE_DISTANCE, MAX_MOVE_PRIORITY, MIN_MOVE_PRIORITY, UNIT_SIDES, UNIT_TYPES } from './core/unitTypes';
 import type { CombatStat, UnitSide, UnitType } from './core/unitTypes';
 import { createAppShell } from './ui/appShell';
 import { createEditorTabs } from './ui/editorTabs';
@@ -29,12 +30,13 @@ shell.content.innerHTML = `
   <h1>実験盤</h1>
   <nav class="toolbar" aria-label="実験の操作">
     <button type="button" id="edit-mode" aria-pressed="true">配置編集</button>
-    <button type="button" id="run-mode" aria-pressed="false">実験</button>
-    <div class="counters"><output id="turn"></output><output id="order-count"></output></div>
+    <button type="button" id="run-mode" aria-pressed="false">対戦開始</button>
+    <div class="counters"><output id="turn"></output><output id="priority-side"></output><output id="order-count"></output></div>
   </nav>
   <div class="workspace">
     <section class="board-section" aria-label="盤面とユニット一覧">
       <div id="board"></div>
+      <section id="match-result" class="match-result" aria-live="polite" hidden><h2 id="result-title"></h2><output id="result-reason"></output></section>
       <div class="turn-actions">
         <button type="button" id="advance">1ターン進める</button>
         <button type="button" id="undo">1ターン戻す</button>
@@ -71,6 +73,7 @@ shell.content.innerHTML = `
             <div class="editor-field"><span>現在HP</span><output id="current-hp"></output></div>
             <div class="combat-fields">${combatFields}</div>
             <label class="editor-field"><span>移動力</span><span class="move-field"><input id="move-distance" type="number" min="${MIN_MOVE_DISTANCE}" max="${MAX_MOVE_DISTANCE}" step="1" required><span>マス</span></span></label>
+            <label class="editor-field"><span>移動優先度</span><input id="move-priority" type="number" min="${MIN_MOVE_PRIORITY}" max="${MAX_MOVE_PRIORITY}" step="1" required></label>
             <button type="button" id="reset-move-distance" class="reset-move">移動力を初期値に戻す</button>
           </div>
           <dl class="unit-details" id="unit-details" hidden><dt>現在地</dt><dd id="position"></dd><dt>目的地</dt><dd id="destination"></dd><dt>直前の行動</dt><dd id="last-action"></dd></dl>
@@ -98,6 +101,22 @@ shell.content.innerHTML = `
           </div>
           <button type="submit" id="create-map">新しいマップを作成</button>
         </form>
+        <section class="editor-section" aria-labelledby="terrain-heading">
+          <h2 id="terrain-heading">地形・陣地</h2>
+          <form id="map-cell-form" class="fields">
+            <label class="editor-field"><span>配置するもの</span><select id="map-tool"><option value="wall">壁</option><option value="clear">平地</option><option value="ally-goal">P1陣地</option><option value="enemy-goal">P2陣地</option></select></label>
+            <div class="input-pair"><label>X <input id="map-x" type="number" min="1" max="${DEFAULT_BOARD_SIZE}" value="1" required></label><label>Y <input id="map-y" type="number" min="1" max="${DEFAULT_BOARD_SIZE}" value="1" required></label></div>
+            <button type="submit" id="apply-map-cell">配置</button>
+            <button type="button" id="pick-map-cell" aria-pressed="false">盤面で配置</button>
+          </form>
+          <dl><dt>P1陣地</dt><dd id="ally-goal-position"></dd><dt>P2陣地</dt><dd id="enemy-goal-position"></dd><dt>壁</dt><dd id="wall-count"></dd></dl>
+        </section>
+        <section aria-labelledby="match-rules-heading">
+          <h2 id="match-rules-heading">対戦ルール</h2>
+          <label class="editor-field"><span>勝利条件</span><select id="match-enabled"><option value="true">相手陣地への到達／全滅</option><option value="false">勝敗なし</option></select></label>
+          <label class="editor-field"><span>初回優先権</span><select id="first-priority">${sideOptions}</select></label>
+          <label class="editor-field"><span>上限ターン</span><input id="turn-limit" type="number" min="${MIN_TURN_LIMIT}" max="${MAX_TURN_LIMIT}" required></label>
+        </section>
       </section>
     </aside>
   </div>
@@ -114,6 +133,10 @@ const controls = {
   edit: element<HTMLButtonElement>('#edit-mode'),
   run: element<HTMLButtonElement>('#run-mode'),
   turn: element<HTMLOutputElement>('#turn'),
+  prioritySide: element<HTMLOutputElement>('#priority-side'),
+  matchResult: element<HTMLElement>('#match-result'),
+  resultTitle: element<HTMLHeadingElement>('#result-title'),
+  resultReason: element<HTMLOutputElement>('#result-reason'),
   orderCount: element<HTMLOutputElement>('#order-count'),
   advance: element<HTMLButtonElement>('#advance'),
   undo: element<HTMLButtonElement>('#undo'),
@@ -126,6 +149,18 @@ const controls = {
   tools: Array.from(document.querySelectorAll<HTMLButtonElement>('[data-edit-tool]')),
   createMap: element<HTMLButtonElement>('#create-map'),
   mapSize: element<HTMLOutputElement>('#map-size'),
+  mapCellForm: element<HTMLFormElement>('#map-cell-form'),
+  mapTool: element<HTMLSelectElement>('#map-tool'),
+  mapX: element<HTMLInputElement>('#map-x'),
+  mapY: element<HTMLInputElement>('#map-y'),
+  applyMapCell: element<HTMLButtonElement>('#apply-map-cell'),
+  pickMapCell: element<HTMLButtonElement>('#pick-map-cell'),
+  allyGoal: element<HTMLElement>('#ally-goal-position'),
+  enemyGoal: element<HTMLElement>('#enemy-goal-position'),
+  wallCount: element<HTMLElement>('#wall-count'),
+  matchEnabled: element<HTMLSelectElement>('#match-enabled'),
+  firstPriority: element<HTMLSelectElement>('#first-priority'),
+  turnLimit: element<HTMLInputElement>('#turn-limit'),
   placementSideField: element<HTMLLabelElement>('#placement-side-field'),
   placementSide: element<HTMLSelectElement>('#placement-side'),
   placementTypeField: element<HTMLLabelElement>('#placement-type-field'),
@@ -138,6 +173,7 @@ const controls = {
   selectedSide: element<HTMLSelectElement>('#selected-side'),
   currentHp: element<HTMLOutputElement>('#current-hp'),
   moveDistance: element<HTMLInputElement>('#move-distance'),
+  movePriority: element<HTMLInputElement>('#move-priority'),
   resetMoveDistance: element<HTMLButtonElement>('#reset-move-distance'),
   position: element<HTMLElement>('#position'),
   destination: element<HTMLElement>('#destination'),
@@ -168,24 +204,11 @@ const editorTabs = createEditorTabs({
 type EditTool = 'move' | 'add' | 'remove';
 let editTool: EditTool = 'move';
 
-function initialBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_SIZE): BoardState {
-  let board = createBoard(width, height);
-  const left = Math.floor((width - 3) / 2);
-  board = applyAction(board, { type: 'move', unitId: 1, position: { x: left, y: height - 2 } }).state;
-  board = applyAction(board, { type: 'move', unitId: 2, position: { x: left + 1, y: height - 2 } }).state;
-  board = applyAction(board, { type: 'set-type', unitId: 2, unitType: 'cavalry' }).state;
-  board = applyAction(board, { type: 'add', unitType: 'archer', position: { x: left + 2, y: height - 2 } }).state;
-  const enemyRow = height >= 4 ? 1 : 0;
-  (Object.keys(UNIT_TYPES) as UnitType[]).forEach((unitType, index) => {
-    board = applyAction(board, { type: 'add', side: 'enemy', unitType, position: { x: left + index, y: enemyRow } }).state;
-  });
-  return board;
-}
-
-let session = createSession(initialBoard());
+let session = createSession(createMatchScenario());
 let selectedId: number | null = session.board.units[0]?.id ?? null;
 let cursor: Cell = { ...session.board.units[0]!.position };
 let targeting = false;
+let mapPainting = false;
 let status = '';
 let isError = false;
 let boardGame: ReturnType<typeof createGame> | undefined;
@@ -214,6 +237,7 @@ function selectUnit(id: number, preserveTool = false): void {
   editorTabs.select('unit');
   cursor = { ...(session.mode === 'run' ? unit.destination ?? unit.position : unit.position) };
   targeting = false;
+  mapPainting = false;
   setStatus();
   render();
 }
@@ -221,6 +245,7 @@ function selectUnit(id: number, preserveTool = false): void {
 function render(): void {
   const { board, mode } = session;
   const editing = mode === 'edit';
+  const ended = board.outcome !== null;
   const adding = editing && editTool === 'add';
   const removing = editing && editTool === 'remove';
   if (!board.units.some((unit) => unit.id === selectedId)) {
@@ -233,7 +258,17 @@ function render(): void {
   cursor = { x: Math.min(Math.max(cursor.x, 0), board.width - 1), y: Math.min(Math.max(cursor.y, 0), board.height - 1) };
   controls.edit.setAttribute('aria-pressed', String(editing));
   controls.run.setAttribute('aria-pressed', String(!editing));
-  controls.turn.value = `ターン ${board.turn}`;
+  controls.turn.value = board.rules.matchEnabled ? `ターン ${board.turn} / ${board.rules.turnLimit}` : `ターン ${board.turn}`;
+  controls.prioritySide.value = `${editing ? '初回' : '次ターンの'}優先権 ${UNIT_SIDES[prioritySideForTurn(board)].name}`;
+  controls.prioritySide.hidden = ended;
+  controls.run.textContent = editing ? '対戦開始' : ended ? '対戦終了' : '対戦中';
+  controls.run.disabled = !editing;
+  controls.reset.textContent = ended ? '同じ配置で再戦' : '開始配置に戻す';
+  controls.matchResult.hidden = !ended;
+  if (board.outcome !== null) {
+    controls.resultTitle.textContent = board.outcome.winner === null ? '引き分け' : `${UNIT_SIDES[board.outcome.winner].name} の勝利`;
+    controls.resultReason.value = { goal: '相手陣地へ到達', elimination: '相手ユニットが全滅', simultaneous: '両陣営が同時に勝利条件を達成', 'turn-limit': '上限ターンに到達' }[board.outcome.reason];
+  }
   controls.orderCount.value = (Object.keys(UNIT_SIDES) as UnitSide[]).map((side) => {
     const units = board.units.filter((item) => item.side === side);
     const used = units.filter((item) => board.orderedUnitIds.includes(item.id)).length;
@@ -253,10 +288,10 @@ function render(): void {
   controls.height.disabled = !editing;
   controls.createMap.hidden = !editing;
   controls.mapSize.value = `${board.width} × ${board.height}`;
-  controls.advance.disabled = editing;
+  controls.advance.disabled = editing || ended;
   controls.undo.disabled = editing || session.history.length === 0;
-  controls.pickTarget.disabled = unit === undefined;
-  controls.clearOrder.disabled = unit === undefined;
+  controls.pickTarget.disabled = unit === undefined || ended;
+  controls.clearOrder.disabled = unit === undefined || ended;
   controls.pickTarget.textContent = targeting ? '指定を取り消す' : '目的地を指定';
   controls.pickTarget.setAttribute('aria-pressed', String(targeting));
   const unitValues = board.units.length === 0 ? [''] : board.units.map((item) => String(item.id));
@@ -278,6 +313,8 @@ function render(): void {
   }
   controls.moveDistance.value = unit === undefined ? '' : String(unit.moveDistance);
   controls.moveDistance.disabled = !editing || unit === undefined;
+  controls.movePriority.value = unit === undefined ? '' : String(unit.movePriority);
+  controls.movePriority.disabled = !editing || unit === undefined;
   controls.resetMoveDistance.hidden = !editing;
   controls.resetMoveDistance.disabled = unit === undefined;
   controls.position.textContent = unit === undefined ? '—' : formatCell(unit.position);
@@ -291,7 +328,20 @@ function render(): void {
   controls.y.value = String(cursor.y + 1);
   controls.coordinateTitle.textContent = editing ? removing ? '削除する位置' : '配置位置' : '目的地';
   controls.apply.textContent = editing ? { move: 'ユニットを移動', add: 'ユニットを追加', remove: 'ユニットを削除' }[editTool] : '目的地を指示';
-  controls.apply.disabled = unit === undefined && (!editing || editTool === 'move');
+  controls.apply.disabled = ended || (unit === undefined && (!editing || editTool === 'move'));
+  controls.x.disabled = ended;
+  controls.y.disabled = ended;
+  controls.allyGoal.textContent = formatCell(board.goals.ally);
+  controls.enemyGoal.textContent = formatCell(board.goals.enemy);
+  controls.wallCount.textContent = `${board.walls.length}マス`;
+  controls.mapX.max = String(board.width);
+  controls.mapY.max = String(board.height);
+  controls.matchEnabled.value = String(board.rules.matchEnabled);
+  controls.firstPriority.value = board.rules.firstPrioritySide;
+  controls.turnLimit.value = String(board.rules.turnLimit);
+  [controls.mapTool, controls.mapX, controls.mapY, controls.applyMapCell, controls.pickMapCell, controls.matchEnabled, controls.firstPriority, controls.turnLimit].forEach((input) => { input.disabled = !editing; });
+  controls.pickMapCell.setAttribute('aria-pressed', String(mapPainting));
+  controls.pickMapCell.textContent = mapPainting ? '盤面での配置を終了' : '盤面で配置';
   controls.status.textContent = status;
   controls.status.setAttribute('role', isError ? 'alert' : 'status');
   controls.status.classList.toggle('error', isError);
@@ -333,7 +383,7 @@ function render(): void {
   controls.combatEvents.replaceChildren(...entries);
   controls.board.style.width = `min(100%, ${Math.round(520 * (board.width + 1) / (board.height + 1))}px)`;
   controls.board.style.aspectRatio = `${board.width + 1} / ${board.height + 1}`;
-  boardGame?.render({ board, selectedUnitId: selectedId, targeting });
+  boardGame?.render({ board, selectedUnitId: selectedId, targeting: targeting || mapPainting });
 }
 
 function perform(action: BoardAction): boolean {
@@ -382,7 +432,19 @@ function applyAt(position: Cell): void {
   }
 }
 
+function placeMapCell(position: Cell): void {
+  const tool = controls.mapTool.value;
+  const action: BoardAction = tool === 'ally-goal' || tool === 'enemy-goal'
+    ? { type: 'set-goal', side: tool === 'ally-goal' ? 'ally' : 'enemy', position }
+    : { type: 'set-wall', position, blocked: tool === 'wall' };
+  if (perform(action)) {
+    controls.mapX.value = String(position.x + 1);
+    controls.mapY.value = String(position.y + 1);
+  }
+}
+
 function clickCell(cell: Cell): void {
+  if (session.mode === 'edit' && mapPainting) { placeMapCell(cell); return; }
   const occupant = session.board.units.find((unit) => unit.position.x === cell.x && unit.position.y === cell.y);
   if (occupant !== undefined && !targeting && (session.mode === 'run' || editTool === 'move')) {
     selectUnit(occupant.id);
@@ -398,30 +460,40 @@ controls.edit.addEventListener('click', () => {
   const unit = session.board.units.find((item) => item.id === selectedId);
   cursor = { ...(unit?.position ?? { x: 0, y: 0 }) };
   targeting = false;
+  mapPainting = false;
   setStatus(); render();
 });
 controls.run.addEventListener('click', () => {
   if (session.mode === 'run') return;
-  session = startExperiment(session);
+  const setupError = validateMatchSetup(session.board);
+  if (setupError !== null) { setStatus(setupError, true); render(); return; }
+  try { session = startExperiment(session); } catch (error) {
+    setStatus(error instanceof Error ? error.message : '対戦の開始設定を確認してください。', true); render(); return;
+  }
   editorTabs.select('unit');
   controls.width.value = String(session.board.width);
   controls.height.value = String(session.board.height);
   targeting = false;
+  mapPainting = false;
   setStatus(); render();
 });
 controls.sizeForm.addEventListener('submit', (event) => {
   event.preventDefault();
   try {
-    session = createSession(initialBoard(controls.width.valueAsNumber, controls.height.valueAsNumber));
+    session = createSession(createMatchScenario(controls.width.valueAsNumber, controls.height.valueAsNumber));
     selectedId = session.board.units[0]?.id ?? null;
     cursor = { ...session.board.units[0]!.position };
     targeting = false;
+    mapPainting = false;
+    controls.mapX.value = '1';
+    controls.mapY.value = '1';
     setStatus(); render();
   } catch (error) {
     setStatus(error instanceof Error ? error.message : '盤面の寸法を確認してください。', true); render();
   }
 });
 controls.tools.forEach((button) => button.addEventListener('click', () => {
+  mapPainting = false;
   editTool = button.dataset.editTool as EditTool;
   const unit = session.board.units.find((item) => item.id === selectedId);
   if (unit !== undefined) cursor = { ...unit.position };
@@ -451,6 +523,28 @@ for (const stat of Object.keys(combatInputs) as CombatStat[]) {
 controls.moveDistance.addEventListener('change', () => {
   if (selectedId !== null) perform({ type: 'set-move-distance', unitId: selectedId, moveDistance: controls.moveDistance.valueAsNumber });
 });
+controls.movePriority.addEventListener('change', () => {
+  if (selectedId !== null) perform({ type: 'set-move-priority', unitId: selectedId, movePriority: controls.movePriority.valueAsNumber });
+});
+controls.mapCellForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  placeMapCell({ x: controls.mapX.valueAsNumber - 1, y: controls.mapY.valueAsNumber - 1 });
+});
+controls.pickMapCell.addEventListener('click', () => {
+  mapPainting = !mapPainting;
+  targeting = false;
+  setStatus(); render();
+});
+element<HTMLButtonElement>('#editor-tab-unit').addEventListener('click', () => {
+  mapPainting = false;
+  render();
+});
+element<HTMLButtonElement>('#editor-tab-unit').addEventListener('focus', () => {
+  if (mapPainting) { mapPainting = false; render(); }
+});
+controls.matchEnabled.addEventListener('change', () => perform({ type: 'set-match-rules', matchEnabled: controls.matchEnabled.value === 'true' }));
+controls.firstPriority.addEventListener('change', () => perform({ type: 'set-match-rules', firstPrioritySide: controls.firstPriority.value as UnitSide }));
+controls.turnLimit.addEventListener('change', () => perform({ type: 'set-match-rules', turnLimit: controls.turnLimit.valueAsNumber }));
 controls.resetMoveDistance.addEventListener('click', () => {
   if (selectedId !== null) perform({ type: 'reset-move-distance', unitId: selectedId });
 });
@@ -476,7 +570,7 @@ controls.reset.addEventListener('click', () => {
   cursor = { ...(session.board.units[0]?.position ?? { x: 0, y: 0 }) };
   controls.width.value = String(session.board.width);
   controls.height.value = String(session.board.height);
-  targeting = false; setStatus(); render();
+  targeting = false; mapPainting = false; setStatus(); render();
 });
 
 render();

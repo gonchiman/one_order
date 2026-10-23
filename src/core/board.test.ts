@@ -6,7 +6,7 @@ import type { UnitType } from './unitTypes';
 
 function makeUnit(id: number, x: number, y: number, destination: Cell | null = null, moveDistance = 1, type: UnitType = 'infantry'): Unit {
   const preset = UNIT_TYPES[type];
-  return { id, type, side: 'ally', moveDistance, hp: preset.maxHp, maxHp: preset.maxHp,
+  return { id, type, side: 'ally', moveDistance, movePriority: preset.movePriority, hp: preset.maxHp, maxHp: preset.maxHp,
     attack: preset.attack, attackRange: preset.attackRange, position: { x, y }, destination };
 }
 
@@ -40,6 +40,9 @@ describe('実験盤の初期化と配置編集', () => {
       nextId: 3,
       orderedUnitIds: [],
       rules: { ...DEFAULT_RULES },
+      walls: [],
+      goals: { ally: null, enemy: null },
+      outcome: null,
     });
     expect(positions(createBoard(3, 12))).toEqual({
       1: { x: 0, y: 11 },
@@ -176,14 +179,14 @@ describe('指示の継続とターン進行', () => {
 });
 
 describe('同時移動の衝突', () => {
-  it('同じ空きマスへ進もうとしたユニットを両方停止する', () => {
+  it('同じ空きマスへ進もうとしたユニットは優先された1体だけが進む', () => {
     const initial = scenario([
       makeUnit(1, 1, 2, { x: 2, y: 2 }),
       makeUnit(2, 3, 2, { x: 2, y: 2 }),
     ]);
     const result = applyAction(initial, { type: 'advance' });
-    expect(positions(result.state)).toEqual(positions(initial));
-    expect(result.blocked.slice().sort()).toEqual([1, 2]);
+    expect(positions(result.state)).toEqual({ 1: { x: 2, y: 2 }, 2: { x: 3, y: 2 } });
+    expect(result.blocked).toEqual([2]);
   });
 
   it('止まっているユニットのマスへ進まず、後続のユニットも停止する', () => {
@@ -232,7 +235,7 @@ describe('同時移動の衝突', () => {
     expect(result.blocked.slice().sort()).toEqual([1, 2, 3, 4]);
   });
 
-  it('競合で停止したユニットの後続も止まり、ユニットの配列順で結果を変えない', () => {
+  it('競合に勝ったユニットの後続も進み、ユニットの配列順で結果を変えない', () => {
     const units = [
       makeUnit(1, 0, 1, { x: 1, y: 1 }),
       makeUnit(2, 1, 1, { x: 2, y: 1 }),
@@ -241,11 +244,11 @@ describe('同時移動の衝突', () => {
     const normal = applyAction(scenario(units), { type: 'advance' });
     const reversed = applyAction(scenario(units.slice().reverse()), { type: 'advance' });
     expect(positions(normal.state)).toEqual({
-      1: { x: 0, y: 1 }, 2: { x: 1, y: 1 }, 3: { x: 3, y: 1 },
+      1: { x: 1, y: 1 }, 2: { x: 2, y: 1 }, 3: { x: 3, y: 1 },
     });
     expect(positions(reversed.state)).toEqual(positions(normal.state));
-    expect(normal.blocked.slice().sort()).toEqual([1, 2, 3]);
-    expect(reversed.blocked.slice().sort()).toEqual([1, 2, 3]);
+    expect(normal.blocked).toEqual([3]);
+    expect(reversed.blocked).toEqual([3]);
   });
 });
 
@@ -270,7 +273,7 @@ describe('入力状態の保護', () => {
 });
 
 describe('実験用のルール設定', () => {
-  it.each<BoardRules>([
+  it.each<Partial<BoardRules>>([
     { orderLimit: 0 },
     { orderLimit: 145 },
     { orderLimit: 1.5 },
@@ -284,14 +287,14 @@ describe('実験用のルール設定', () => {
     const rules = { orderLimit: 144 };
     const state = createBoard(12, 12, rules);
     rules.orderLimit = 2;
-    expect(state.rules).toEqual({ orderLimit: 144 });
-    expect(createBoard().rules).toEqual({ orderLimit: 1 });
+    expect(state.rules).toEqual({ ...DEFAULT_RULES, orderLimit: 144 });
+    expect(createBoard().rules).toEqual(DEFAULT_RULES);
   });
 
   it('設定した数のユニットに指示でき、再編集で枠を重複消費しない', () => {
     const initial = {
       ...scenario([makeUnit(1, 0, 0), makeUnit(2, 2, 0), makeUnit(3, 4, 0)]),
-      rules: { orderLimit: 2 },
+      rules: { ...DEFAULT_RULES, orderLimit: 2 },
     };
     const first = applyAction(initial, { type: 'order', unitId: 1, destination: { x: 0, y: 2 } });
     const revised = applyAction(first.state, { type: 'order', unitId: 1, destination: null });
@@ -315,7 +318,7 @@ describe('兵科と個別の移動力', () => {
     const result = applyAction(createBoard(), { type: 'add', position: { x: 2, y: 2 }, unitType });
     expect(result.error).toBeNull();
     expect(result.state.units.at(-1)).toEqual(makeUnit(3, 2, 2, null, UNIT_TYPES[unitType].moveDistance, unitType));
-    expect(result.state.rules).toEqual({ orderLimit: 1 });
+    expect(result.state.rules).toEqual(DEFAULT_RULES);
   });
 
   it('兵科変更で個別移動力を初期値へ戻し、位置・目的地・他のユニットを保持する', () => {
@@ -419,14 +422,14 @@ describe('兵科と個別の移動力', () => {
   });
 
   it('短い移動力の相手と競合して止まった騎兵は、そのターンに再試行しない', () => {
-    const initial = scenario([
+    const initial = { ...scenario([
       makeUnit(1, 1, 0, { x: 6, y: 0 }, 2, 'cavalry'),
       makeUnit(2, 3, 0, { x: 0, y: 0 }),
-    ]);
+    ]), turn: 1 };
     const result = applyAction(initial, { type: 'advance' });
-    expect(positions(result.state)).toEqual(positions(initial));
-    expect(result.events.map((event) => event.reason)).toEqual(['conflict', 'conflict']);
-    expect(result.blocked).toEqual([1, 2]);
+    expect(positions(result.state)).toEqual({ 1: { x: 1, y: 0 }, 2: { x: 2, y: 0 } });
+    expect(result.events.map((event) => event.reason)).toEqual(['conflict', 'moved']);
+    expect(result.blocked).toEqual([1]);
   });
 
   it('遠方の高速ユニットが動き続けても未指示・到着・停止の理由を保持する', () => {
@@ -462,11 +465,11 @@ describe('各ユニットの直前行動と停止理由', () => {
     const initial = scenario([
       makeUnit(1, 0, 1, { x: 4, y: 1 }),
       makeUnit(2, 1, 1, { x: 4, y: 1 }),
-      makeUnit(3, 3, 1, { x: 0, y: 1 }),
+      { ...makeUnit(3, 3, 1, { x: 0, y: 1 }), movePriority: 2 },
     ]);
     const result = applyAction(initial, { type: 'advance' });
-    expect(result.events.map((event) => event.reason)).toEqual(['occupied', 'conflict', 'conflict']);
-    expect(result.blocked).toEqual([1, 2, 3]);
+    expect(result.events.map((event) => event.reason)).toEqual(['occupied', 'conflict', 'moved']);
+    expect(result.blocked).toEqual([1, 2]);
   });
 
   it('循環の参加者はcycle、停留しているユニットに遮られたユニットはoccupiedを返す', () => {
@@ -520,14 +523,14 @@ describe('複数マス移動の通過中判定', () => {
     expect(result.blocked).toEqual([]);
   });
 
-  it('途中の同時進入で競合したユニットを両方停止する', () => {
+  it('途中の競合に負けたユニットは停止し、勝ったユニットは残りの移動力で迂回する', () => {
     const initial = {
       ...scenario([makeUnit(1, 0, 0, { x: 4, y: 0 }, 3), makeUnit(2, 4, 0, { x: 0, y: 0 }, 3)]),
     };
     const result = applyAction(initial, { type: 'advance' });
-    expect(positions(result.state)).toEqual({ 1: { x: 1, y: 0 }, 2: { x: 3, y: 0 } });
-    expect(result.events.map((event) => event.reason)).toEqual(['conflict', 'conflict']);
-    expect(result.blocked).toEqual([1, 2]);
+    expect(positions(result.state)).toEqual({ 1: { x: 2, y: 1 }, 2: { x: 3, y: 0 } });
+    expect(result.events.map((event) => event.reason)).toEqual(['moved', 'conflict']);
+    expect(result.blocked).toEqual([2]);
   });
 
   it('途中ですれ違ってマスを入れ替えようとしたユニットを停止する', () => {
