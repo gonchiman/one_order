@@ -1,5 +1,6 @@
 import './style.css';
 import { createGame } from './game/createGame';
+import { RANGE_COLORS } from './game/scenes/BoardScene';
 import { DEFAULT_BOARD_SIZE, MIN_TURN_LIMIT, MAX_TURN_LIMIT, prioritySideForTurn, validateMatchSetup } from './core/board';
 import type { BoardAction, Cell, UnitEvent } from './core/board';
 import { createMatchScenario } from './core/scenario';
@@ -21,6 +22,9 @@ import {
 const app = document.querySelector<HTMLElement>('#app');
 if (app === null) throw new Error('画面の配置先がありません。');
 const shell = createAppShell(app);
+for (const [name, color] of Object.entries(RANGE_COLORS)) {
+  shell.content.style.setProperty(`--range-${name}`, `#${color.toString(16).padStart(6, '0')}`);
+}
 const typeOptions = Object.entries(UNIT_TYPES)
   .map(([value, definition]) => `<option value="${value}">${definition.name}</option>`).join('');
 const sideOptions = Object.entries(UNIT_SIDES)
@@ -37,6 +41,10 @@ shell.content.innerHTML = `
   <div class="workspace">
     <section class="board-section" aria-label="盤面とユニット一覧">
       <div id="board"></div>
+      <div id="range-legend" class="range-legend" aria-label="範囲の表示" hidden>
+        <span><i class="range-swatch range-movement" aria-hidden="true"></i>1ターンの移動範囲（目安）</span>
+        <span><i class="range-swatch range-attack" aria-hidden="true"></i>現在地からの攻撃射程</span>
+      </div>
       <section id="match-result" class="match-result" aria-live="polite" hidden><h2 id="result-title"></h2><output id="result-reason"></output></section>
       <div class="turn-actions">
         <button type="button" id="advance">1ターン進める</button>
@@ -133,6 +141,7 @@ function element<T extends HTMLElement>(selector: string): T {
 
 const controls = {
   board: element<HTMLDivElement>('#board'),
+  rangeLegend: element<HTMLDivElement>('#range-legend'),
   edit: element<HTMLButtonElement>('#edit-mode'),
   run: element<HTMLButtonElement>('#run-mode'),
   turn: element<HTMLOutputElement>('#turn'),
@@ -267,6 +276,7 @@ function render(): void {
       : ordering ? fallback.destination ?? fallback.position : fallback.position) };
   }
   const unit = board.units.find((item) => item.id === selectedId);
+  controls.rangeLegend.hidden = unit === undefined;
   cursor = { x: Math.min(Math.max(cursor.x, 0), board.width - 1), y: Math.min(Math.max(cursor.y, 0), board.height - 1) };
   controls.edit.setAttribute('aria-pressed', String(editing));
   controls.run.setAttribute('aria-pressed', String(!editing));

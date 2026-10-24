@@ -149,6 +149,34 @@ function isWall(state: BoardState, cell: Cell): boolean {
   return state.walls.some((wall) => sameCell(wall, cell));
 }
 
+// 現在の配置を固定した移動範囲。同時移動で空くマスや競合の結果は予測しない。
+export function getMovementRange(state: BoardState, unitId: number): Cell[] {
+  const unit = state.units.find((item) => item.id === unitId);
+  if (unit === undefined) return [];
+
+  const blocked = new Set([
+    ...state.walls.map(cellKey),
+    ...state.units.filter((item) => item.id !== unitId).map((item) => cellKey(item.position)),
+  ]);
+  const visited = new Set([cellKey(unit.position)]);
+  const queue = [{ cell: unit.position, steps: 0 }];
+  const range: Cell[] = [];
+  const directions = [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }];
+  for (let index = 0; index < queue.length; index += 1) {
+    const { cell, steps } = queue[index]!;
+    if (steps >= unit.moveDistance) continue;
+    for (const direction of directions) {
+      const next = { x: cell.x + direction.x, y: cell.y + direction.y };
+      const key = cellKey(next);
+      if (!validCell(state, next) || visited.has(key) || blocked.has(key)) continue;
+      visited.add(key);
+      range.push(next);
+      queue.push({ cell: next, steps: steps + 1 });
+    }
+  }
+  return range;
+}
+
 function oppositeSide(side: UnitSide): UnitSide {
   return side === 'ally' ? 'enemy' : 'ally';
 }

@@ -1,9 +1,11 @@
 import Phaser from 'phaser';
+import { getMovementRange } from '../../core/board';
 import type { BoardState, Cell } from '../../core/board';
 import { unitLabel } from '../../core/labels';
 import { UNIT_SIDES, UNIT_TYPES } from '../../core/unitTypes';
 
 const SIDE_COLORS = Object.freeze({ ally: 0x245a81, enemy: 0xa13737 });
+export const RANGE_COLORS = Object.freeze({ movement: 0xe1efdf, marker: 0x386638, attack: 0x8a6840 });
 
 export interface BoardView {
   board: BoardState;
@@ -130,13 +132,29 @@ export class BoardScene extends Phaser.Scene {
     }
 
     const selected = board.units.find((unit) => unit.id === selectedUnitId);
+    const movementRange = selected === undefined ? [] : getMovementRange(board, selected.id);
     if (selected !== undefined) {
-      graphics.fillStyle(SIDE_COLORS[selected.side], 0.06);
+      const markedCells = new Set([
+        ...Object.values(board.goals).filter((cell): cell is Cell => cell !== null),
+        ...board.units.map((unit) => unit.destination).filter((cell): cell is Cell => cell !== null),
+      ].map((cell) => `${cell.x},${cell.y}`));
+      for (const cell of movementRange) {
+        graphics.fillStyle(RANGE_COLORS.movement, 1);
+        graphics.fillRect(x + cell.x * cellSize, y + cell.y * cellSize, cellSize, cellSize);
+        if (!markedCells.has(`${cell.x},${cell.y}`)) {
+          graphics.fillStyle(RANGE_COLORS.marker, 1);
+          graphics.fillCircle(x + (cell.x + 0.5) * cellSize, y + (cell.y + 0.5) * cellSize, Math.max(1, Math.min(2, cellSize * 0.05)));
+        }
+      }
+      graphics.lineStyle(1, RANGE_COLORS.attack, 1);
       for (let row = 0; row < board.height; row += 1) {
         for (let column = 0; column < board.width; column += 1) {
           const distance = Math.abs(column - selected.position.x) + Math.abs(row - selected.position.y);
           if (distance > 0 && distance <= selected.attackRange && !wallKeys.has(`${column},${row}`)) {
-            graphics.fillRect(x + column * cellSize, y + row * cellSize, cellSize, cellSize);
+            const occupied = board.units.some((unit) => unit.position.x === column && unit.position.y === row);
+            // 小さいマスのユニットにも射程枠が隠れないよう外側へ寄せる。
+            const inset = smallCell && occupied ? Math.max(1, cellSize * 0.035) : Math.max(3, cellSize * 0.16);
+            graphics.strokeRect(x + column * cellSize + inset, y + row * cellSize + inset, Math.max(0, cellSize - inset * 2), Math.max(0, cellSize - inset * 2));
           }
         }
       }
@@ -247,6 +265,8 @@ export class BoardScene extends Phaser.Scene {
     const selectedDescription = selected === undefined ? '選択なし'
       : `選択中のユニット ${unitLabel(selected.id)} ${UNIT_SIDES[selected.side].name} ${UNIT_TYPES[selected.type].name}、HP${selected.hp}/${selected.maxHp}、攻撃力${selected.attack}、射程${selected.attackRange}マス、移動力${selected.moveDistance}マス、移動優先度${selected.movePriority}`;
     const coordinates = (cell: Cell): string => `(${cell.x + 1},${cell.y + 1})`;
+    const movementDescription = selected === undefined ? ''
+      : `1ターンの移動範囲（目安）${movementRange.length === 0 ? 'なし' : movementRange.map(coordinates).join('・')}`;
     const goalsDescription = (['ally', 'enemy'] as const).map((side) => {
       const goal = board.goals[side];
       return `${side === 'ally' ? 'P1' : 'P2'}陣地${goal === null ? 'なし' : coordinates(goal)}`;
@@ -261,7 +281,7 @@ export class BoardScene extends Phaser.Scene {
       : `${winnerDescription}、${outcomeReasons[board.outcome.reason]}`;
     this.game.canvas.setAttribute('aria-label', [
       `${board.width}列${board.height}行の盤面、ユニット${board.units.length}体、ターン${board.turn}`,
-      selectedDescription, goalsDescription, wallsDescription, destinationsDescription, outcomeDescription,
+      selectedDescription, movementDescription, goalsDescription, wallsDescription, destinationsDescription, outcomeDescription,
     ].filter(Boolean).join('、'));
     this.game.canvas.style.cursor = this.view.targeting ? 'crosshair' : 'default';
   }
