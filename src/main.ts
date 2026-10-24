@@ -1,7 +1,8 @@
 import './style.css';
 import { createGame } from './game/createGame';
+import type { BoardViewportSnapshot } from './game/createGame';
 import { RANGE_COLORS } from './game/scenes/BoardScene';
-import { DEFAULT_BOARD_SIZE, MIN_TURN_LIMIT, MAX_TURN_LIMIT, prioritySideForTurn, validateMatchSetup } from './core/board';
+import { DEFAULT_BOARD_SIZE, MIN_BOARD_SIZE, MAX_BOARD_SIZE, MIN_TURN_LIMIT, MAX_TURN_LIMIT, prioritySideForTurn, validateMatchSetup } from './core/board';
 import type { BoardAction, Cell, UnitEvent } from './core/board';
 import { createMatchScenario } from './core/scenario';
 import { unitLabel } from './core/labels';
@@ -40,7 +41,16 @@ shell.content.innerHTML = `
   </nav>
   <div class="workspace">
     <section class="board-section" aria-label="盤面とユニット一覧">
+      <div class="viewport-toolbar" role="group" aria-label="盤面の表示">
+        <button type="button" id="zoom-out" aria-label="縮小">−</button>
+        <output id="zoom-level" aria-label="表示倍率">100%</output>
+        <button type="button" id="zoom-in" aria-label="拡大">＋</button>
+        <button type="button" id="fit-board">全体表示</button>
+        <button type="button" id="focus-unit">選択へ</button>
+        <button type="button" id="pan-board" aria-pressed="false">表示移動</button>
+      </div>
       <div id="board"></div>
+      <output id="visible-cells" class="visible-cells" aria-label="表示中の座標"></output>
       <div id="range-legend" class="range-legend" aria-label="範囲の表示" hidden>
         <span><i class="range-swatch range-movement" aria-hidden="true"></i>1ターンの移動範囲（目安）</span>
         <span><i class="range-swatch range-attack" aria-hidden="true"></i>現在地からの攻撃射程</span>
@@ -107,8 +117,8 @@ shell.content.innerHTML = `
         <header class="section-heading"><h2>マップ</h2><output id="map-size"></output></header>
         <form id="size-form" class="fields">
           <div class="input-pair">
-            <label>幅（マス） <input id="width" type="number" min="3" max="12" step="1" value="${DEFAULT_BOARD_SIZE}" required></label>
-            <label>高さ（マス） <input id="height" type="number" min="3" max="12" step="1" value="${DEFAULT_BOARD_SIZE}" required></label>
+            <label>幅（マス） <input id="width" type="number" min="${MIN_BOARD_SIZE}" max="${MAX_BOARD_SIZE}" step="1" value="${DEFAULT_BOARD_SIZE}" required></label>
+            <label>高さ（マス） <input id="height" type="number" min="${MIN_BOARD_SIZE}" max="${MAX_BOARD_SIZE}" step="1" value="${DEFAULT_BOARD_SIZE}" required></label>
           </div>
           <button type="submit" id="create-map">新しいマップを作成</button>
         </form>
@@ -141,6 +151,13 @@ function element<T extends HTMLElement>(selector: string): T {
 
 const controls = {
   board: element<HTMLDivElement>('#board'),
+  zoomOut: element<HTMLButtonElement>('#zoom-out'),
+  zoomIn: element<HTMLButtonElement>('#zoom-in'),
+  zoomLevel: element<HTMLOutputElement>('#zoom-level'),
+  fitBoard: element<HTMLButtonElement>('#fit-board'),
+  focusUnit: element<HTMLButtonElement>('#focus-unit'),
+  panBoard: element<HTMLButtonElement>('#pan-board'),
+  visibleCells: element<HTMLOutputElement>('#visible-cells'),
   rangeLegend: element<HTMLDivElement>('#range-legend'),
   edit: element<HTMLButtonElement>('#edit-mode'),
   run: element<HTMLButtonElement>('#run-mode'),
@@ -226,6 +243,16 @@ let status = '';
 let isError = false;
 let boardGame: ReturnType<typeof createGame> | undefined;
 
+function renderViewport(view: BoardViewportSnapshot): void {
+  controls.zoomLevel.value = `${Math.round(view.zoom * 100)}%`;
+  controls.zoomIn.disabled = !view.canZoomIn;
+  controls.zoomOut.disabled = !view.canZoomOut;
+  controls.panBoard.setAttribute('aria-pressed', String(view.isPanning));
+  const bounds = view.visible;
+  controls.visibleCells.value = bounds === null ? ''
+    : `X ${bounds.minX + 1}–${bounds.maxX + 1} / Y ${bounds.minY + 1}–${bounds.maxY + 1}`;
+}
+
 const formatCell = (cell: Cell | null): string => cell === null ? '—' : `(${cell.x + 1}, ${cell.y + 1})`;
 const eventLabels: Record<UnitEvent['reason'], string> = {
   moved: '移動',
@@ -277,6 +304,7 @@ function render(): void {
   }
   const unit = board.units.find((item) => item.id === selectedId);
   controls.rangeLegend.hidden = unit === undefined;
+  controls.focusUnit.disabled = unit === undefined;
   cursor = { x: Math.min(Math.max(cursor.x, 0), board.width - 1), y: Math.min(Math.max(cursor.y, 0), board.height - 1) };
   controls.edit.setAttribute('aria-pressed', String(editing));
   controls.run.setAttribute('aria-pressed', String(!editing));
@@ -405,8 +433,6 @@ function render(): void {
     entries.push(entry);
   }
   controls.combatEvents.replaceChildren(...entries);
-  controls.board.style.width = `min(100%, ${Math.round(520 * (board.width + 1) / (board.height + 1))}px)`;
-  controls.board.style.aspectRatio = `${board.width + 1} / ${board.height + 1}`;
   boardGame?.render({ board, selectedUnitId: selectedId, targeting: targeting || mapPainting });
 }
 
@@ -483,6 +509,24 @@ function clickCell(cell: Cell): void {
   }
 }
 
+controls.zoomIn.addEventListener('click', () => boardGame?.zoomIn());
+controls.zoomOut.addEventListener('click', () => boardGame?.zoomOut());
+controls.fitBoard.addEventListener('click', () => boardGame?.fit());
+controls.focusUnit.addEventListener('click', () => boardGame?.focusSelected());
+controls.panBoard.addEventListener('click', () => {
+  boardGame?.setPanning(controls.panBoard.getAttribute('aria-pressed') !== 'true');
+});
+controls.panBoard.addEventListener('keydown', (event) => {
+  if (controls.panBoard.getAttribute('aria-pressed') !== 'true') return;
+  const directions: Record<string, [number, number]> = {
+    ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+  };
+  const direction = directions[event.key];
+  if (direction === undefined) return;
+  event.preventDefault();
+  boardGame?.panByCells(...direction);
+});
+
 controls.edit.addEventListener('click', () => {
   if (session.mode === 'edit') return;
   session = editExperiment(session);
@@ -520,6 +564,8 @@ controls.sizeForm.addEventListener('submit', (event) => {
     controls.mapX.value = '1';
     controls.mapY.value = '1';
     setStatus(); render();
+    boardGame?.setPanning(false);
+    boardGame?.fit();
   } catch (error) {
     setStatus(error instanceof Error ? error.message : '盤面の寸法を確認してください。', true); render();
   }
@@ -609,7 +655,7 @@ controls.reset.addEventListener('click', () => {
 });
 
 render();
-boardGame = createGame('board', { board: session.board, selectedUnitId: selectedId, targeting }, clickCell);
+boardGame = createGame('board', { board: session.board, selectedUnitId: selectedId, targeting }, clickCell, renderViewport);
 
 if (import.meta.hot) {
   import.meta.hot.accept();

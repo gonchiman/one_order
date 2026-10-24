@@ -31,6 +31,8 @@ export const MIN_TURN_LIMIT = 1;
 export const MAX_TURN_LIMIT = 999;
 export const DEFAULT_RULES: BoardRules = Object.freeze({ orderLimit: 1, matchEnabled: false, firstPrioritySide: 'ally', turnLimit: 50 });
 export const DEFAULT_BOARD_SIZE = 9;
+export const MIN_BOARD_SIZE = 3;
+export const MAX_BOARD_SIZE = 50;
 
 export interface MatchOutcome {
   winner: UnitSide | null;
@@ -91,7 +93,7 @@ export interface UnitEvent {
 }
 
 function validDimension(value: number): boolean {
-  return Number.isInteger(value) && value >= 3 && value <= 12;
+  return Number.isInteger(value) && value >= MIN_BOARD_SIZE && value <= MAX_BOARD_SIZE;
 }
 
 function validateRules(rules: BoardRules): string | null {
@@ -108,7 +110,7 @@ function validateRules(rules: BoardRules): string | null {
 
 export function createBoard(width = DEFAULT_BOARD_SIZE, height = DEFAULT_BOARD_SIZE, rules: Partial<BoardRules> = DEFAULT_RULES): BoardState {
   if (!validDimension(width) || !validDimension(height)) {
-    throw new RangeError('盤面の幅と高さは3〜12の整数で指定してください。');
+    throw new RangeError(`盤面の幅と高さは${MIN_BOARD_SIZE}〜${MAX_BOARD_SIZE}の整数で指定してください。`);
   }
   const mergedRules = { ...DEFAULT_RULES, ...rules };
   const rulesError = validateRules(mergedRules);

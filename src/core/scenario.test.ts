@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { validateMatchSetup } from './board';
+import { MAX_BOARD_SIZE, MIN_BOARD_SIZE, validateMatchSetup } from './board';
 import { createMatchScenario } from './scenario';
 import { UNIT_TYPES } from './unitTypes';
 
 describe('対戦の初期配置', () => {
-  it.each([[3, 3], [9, 9], [12, 12], [3, 12], [12, 3], [7, 7]])(
+  it.each([[3, 3], [9, 9], [12, 12], [3, 12], [12, 3], [7, 7], [13, 13], [20, 15], [50, 50], [3, 50], [50, 3]])(
     '%i × %iで両陣営の3兵科と拠点を有効なマスに配置する', (width, height) => {
       const board = createMatchScenario(width, height);
       expect(validateMatchSetup(board)).toBeNull();
@@ -31,10 +31,16 @@ describe('対戦の初期配置', () => {
           });
           expect(unit.position.x).toBeGreaterThanOrEqual(0);
           expect(unit.position.x).toBeLessThan(width);
+          expect(unit.position.y).toBeGreaterThanOrEqual(0);
+          expect(unit.position.y).toBeLessThan(height);
         }
       }
       expect(board.walls).toHaveLength(width >= 7 && height >= 7 ? height === 7 ? 2 : 4 : 0);
       for (const wall of board.walls) {
+        expect(wall.x).toBeGreaterThanOrEqual(0);
+        expect(wall.x).toBeLessThan(width);
+        expect(wall.y).toBeGreaterThanOrEqual(0);
+        expect(wall.y).toBeLessThan(height);
         expect(board.units.some((unit) => unit.position.x === wall.x && unit.position.y === wall.y)).toBe(false);
         expect(Object.values(board.goals).some((goal) => goal?.x === wall.x && goal.y === wall.y)).toBe(false);
         expect(board.walls).toContainEqual({ x: width - 1 - wall.x, y: height - 1 - wall.y });
@@ -43,8 +49,8 @@ describe('対戦の初期配置', () => {
   );
 
   it('対応する全サイズで有効な配置を生成する', () => {
-    for (let width = 3; width <= 12; width += 1) {
-      for (let height = 3; height <= 12; height += 1) {
+    for (let width = MIN_BOARD_SIZE; width <= MAX_BOARD_SIZE; width += 1) {
+      for (let height = MIN_BOARD_SIZE; height <= MAX_BOARD_SIZE; height += 1) {
         expect(validateMatchSetup(createMatchScenario(width, height))).toBeNull();
       }
     }
@@ -63,7 +69,7 @@ describe('対戦の初期配置', () => {
 
   it('範囲外の盤面サイズを拒否する', () => {
     expect(() => createMatchScenario(2, 9)).toThrow(RangeError);
-    expect(() => createMatchScenario(9, 13)).toThrow(RangeError);
+    expect(() => createMatchScenario(9, 51)).toThrow(RangeError);
     expect(() => createMatchScenario(3.5, 9)).toThrow(RangeError);
   });
 });

@@ -51,7 +51,7 @@ describe('実験盤の初期化と配置編集', () => {
   });
 
   it.each([
-    [2, 7], [13, 7], [7, 2], [7, 13], [3.5, 7], [7, 4.5], [NaN, 7], [7, Infinity],
+    [2, 7], [51, 7], [7, 2], [7, 51], [3.5, 7], [7, 4.5], [NaN, 7], [7, Infinity],
   ])('盤面の不正な寸法 %s × %s を受け付けない', (width, height) => {
     expect(() => createBoard(width, height)).toThrow();
   });

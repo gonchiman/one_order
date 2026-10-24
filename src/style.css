@@ -132,6 +132,7 @@ input {
 
 .toolbar,
 .turn-actions,
+.viewport-toolbar,
 .placement-tools {
   display: flex;
   align-items: center;
@@ -143,8 +144,11 @@ input {
 .counters { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-left: auto; font-variant-numeric: tabular-nums; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 304px; gap: 24px; align-items: start; }
 .board-section, aside { min-width: 0; }
-#board { position: relative; margin: 0 auto; max-width: 100%; }
-#board canvas { position: absolute; inset: 0; }
+.viewport-toolbar { margin-bottom: 8px; gap: 6px; }
+#zoom-level { min-width: 4ch; text-align: center; font-variant-numeric: tabular-nums; }
+#board { position: relative; width: 100%; height: clamp(360px, 65vh, 520px); overflow: hidden; }
+#board canvas { position: absolute; inset: 0; touch-action: none; }
+.visible-cells { display: block; margin-top: 6px; color: #555; font-size: 12px; font-variant-numeric: tabular-nums; }
 .range-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; max-width: 520px; margin: 8px auto 0; font-size: 12px; }
 .range-legend > span { display: inline-flex; align-items: center; gap: 6px; }
 .range-swatch { display: inline-block; width: 14px; height: 14px; flex: 0 0 auto; }
