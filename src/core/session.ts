@@ -90,7 +90,8 @@ export function actOnSession(
   const editing = action.type === 'add' || action.type === 'move' || action.type === 'remove'
     || action.type === 'set-type' || action.type === 'set-move-distance' || action.type === 'reset-move-distance'
     || action.type === 'set-side' || action.type === 'set-combat-stat' || action.type === 'set-move-priority'
-    || action.type === 'set-wall' || action.type === 'set-goal' || action.type === 'set-match-rules';
+    || action.type === 'set-wall' || action.type === 'set-goal' || action.type === 'set-match-rules'
+    || action.type === 'set-initial-order';
   if (editing && session.mode !== 'edit') {
     return { session, error: '配置を変更するには「配置編集」に切り替えてください。' };
   }

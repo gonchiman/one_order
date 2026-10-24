@@ -53,9 +53,10 @@ shell.content.innerHTML = `
       </div>
       <section id="editor-panel-unit" role="tabpanel" aria-labelledby="editor-tab-unit">
         <section id="editing-controls" class="editor-section" aria-labelledby="placement-heading">
-          <h2 id="placement-heading">配置</h2>
-          <div class="placement-tools" role="group" aria-label="配置操作">
+          <h2 id="placement-heading">配置・初期指示</h2>
+          <div class="placement-tools" role="group" aria-label="配置・初期指示の操作">
             <button type="button" data-edit-tool="move" aria-pressed="true">選択・移動</button>
+            <button type="button" data-edit-tool="order" aria-pressed="false">初期指示</button>
             <button type="button" data-edit-tool="add" aria-pressed="false">追加</button>
             <button type="button" data-edit-tool="remove" aria-pressed="false">削除</button>
           </div>
@@ -201,7 +202,7 @@ const editorTabs = createEditorTabs({
   unit: { tab: element<HTMLButtonElement>('#editor-tab-unit'), panel: element<HTMLElement>('#editor-panel-unit') },
   map: { tab: element<HTMLButtonElement>('#editor-tab-map'), panel: element<HTMLElement>('#editor-panel-map') },
 });
-type EditTool = 'move' | 'add' | 'remove';
+type EditTool = 'move' | 'order' | 'add' | 'remove';
 let editTool: EditTool = 'move';
 
 let session = createSession(createMatchScenario());
@@ -229,14 +230,18 @@ function setStatus(message = '', error = false): void {
   isError = error;
 }
 
+function isOrderMode(): boolean {
+  return session.mode === 'run' || editTool === 'order';
+}
+
 function selectUnit(id: number | null, preserveTool = false): void {
   const unit = session.board.units.find((item) => item.id === id);
   if (id !== null && unit === undefined) return;
   selectedId = id;
-  if (session.mode === 'edit' && !preserveTool) editTool = 'move';
+  if (session.mode === 'edit' && !preserveTool && editTool !== 'order') editTool = 'move';
   editorTabs.select('unit');
   if (unit !== undefined) {
-    cursor = { ...(session.mode === 'run' ? unit.destination ?? unit.position : unit.position) };
+    cursor = { ...(isOrderMode() ? unit.destination ?? unit.position : unit.position) };
   }
   targeting = false;
   mapPainting = false;
@@ -247,6 +252,7 @@ function selectUnit(id: number | null, preserveTool = false): void {
 function render(): void {
   const { board, mode } = session;
   const editing = mode === 'edit';
+  const ordering = isOrderMode();
   const ended = board.outcome !== null;
   const adding = editing && editTool === 'add';
   const removing = editing && editTool === 'remove';
@@ -254,7 +260,7 @@ function render(): void {
     const fallback = board.units[0];
     selectedId = fallback?.id ?? null;
     cursor = { ...(fallback === undefined ? { x: 0, y: 0 }
-      : editing ? fallback.position : fallback.destination ?? fallback.position) };
+      : ordering ? fallback.destination ?? fallback.position : fallback.position) };
   }
   const unit = board.units.find((item) => item.id === selectedId);
   cursor = { x: Math.min(Math.max(cursor.x, 0), board.width - 1), y: Math.min(Math.max(cursor.y, 0), board.height - 1) };
@@ -284,8 +290,8 @@ function render(): void {
   controls.selected.hidden = adding;
   controls.selectedProperties.hidden = adding || removing;
   controls.unitEditorTitle.textContent = adding ? 'ユニットを追加' : removing ? 'ユニットを削除' : '選択中のユニット';
-  controls.details.hidden = editing;
-  controls.point.hidden = editing;
+  controls.details.hidden = !ordering;
+  controls.point.hidden = !ordering;
   controls.width.disabled = !editing;
   controls.height.disabled = !editing;
   controls.createMap.hidden = !editing;
@@ -294,6 +300,7 @@ function render(): void {
   controls.undo.disabled = editing || session.history.length === 0;
   controls.pickTarget.disabled = unit === undefined || ended;
   controls.clearOrder.disabled = unit === undefined || ended;
+  controls.clearOrder.textContent = editing ? '初期指示を解除' : '指示を解除';
   controls.pickTarget.textContent = targeting ? '指定を取り消す' : '目的地を指定';
   controls.pickTarget.setAttribute('aria-pressed', String(targeting));
   const unitValues = ['', ...board.units.map((item) => String(item.id))];
@@ -322,14 +329,14 @@ function render(): void {
   controls.destination.textContent = unit === undefined ? '—' : formatCell(unit.destination);
   const event = session.events.find((item) => item.unitId === selectedId);
   controls.lastAction.textContent = event === undefined ? '—' : eventLabels[event.reason];
-  controls.orderLimit.textContent = `${board.rules.orderLimit}体 / 陣営 / ターン`;
+  controls.orderLimit.textContent = editing ? '無制限' : `${board.rules.orderLimit}体 / 陣営 / ターン`;
   controls.x.max = String(board.width);
   controls.y.max = String(board.height);
   controls.x.value = String(cursor.x + 1);
   controls.y.value = String(cursor.y + 1);
-  controls.coordinateTitle.textContent = editing ? removing ? '削除する位置' : '配置位置' : '目的地';
-  controls.apply.textContent = editing ? { move: 'ユニットを移動', add: 'ユニットを追加', remove: 'ユニットを削除' }[editTool] : '目的地を指示';
-  controls.apply.disabled = ended || (unit === undefined && (!editing || editTool === 'move'));
+  controls.coordinateTitle.textContent = ordering ? editing ? '初期目的地' : '目的地' : removing ? '削除する位置' : '配置位置';
+  controls.apply.textContent = editing ? { move: 'ユニットを移動', order: '初期指示を設定', add: 'ユニットを追加', remove: 'ユニットを削除' }[editTool] : '目的地を指示';
+  controls.apply.disabled = ended || (unit === undefined && (ordering || editTool === 'move'));
   controls.x.disabled = ended;
   controls.y.disabled = ended;
   controls.allyGoal.textContent = formatCell(board.goals.ally);
@@ -403,7 +410,7 @@ function perform(action: BoardAction): boolean {
     const attacks = session.combatEvents.length;
     const defeated = new Set(session.combatEvents.filter((event) => event.defeated).map((event) => event.targetId)).size;
     setStatus(`${moved}体移動${blocked > 0 ? `・${blocked}体停止` : ''}・${attacks}回攻撃${defeated > 0 ? `・${defeated}体撃破` : ''}`);
-  } else if (action.type === 'order') {
+  } else if (action.type === 'order' || action.type === 'set-initial-order') {
     targeting = false;
     setStatus(`ユニット ${unitLabel(action.unitId)}：${action.destination === null ? '指示を解除' : `目的地 ${formatCell(action.destination)}`}`);
   } else {
@@ -415,9 +422,9 @@ function perform(action: BoardAction): boolean {
 
 function applyAt(position: Cell): void {
   cursor = position;
-  if (session.mode === 'run') {
+  if (isOrderMode()) {
     if (selectedId === null) { setStatus('ユニットを選んでください。', true); render(); return; }
-    perform({ type: 'order', unitId: selectedId, destination: position });
+    perform({ type: session.mode === 'edit' ? 'set-initial-order' : 'order', unitId: selectedId, destination: position });
     return;
   }
   if (editTool === 'add') {
@@ -447,7 +454,7 @@ function placeMapCell(position: Cell): void {
 function clickCell(cell: Cell): void {
   if (session.mode === 'edit' && mapPainting) { placeMapCell(cell); return; }
   const occupant = session.board.units.find((unit) => unit.position.x === cell.x && unit.position.y === cell.y);
-  if (occupant !== undefined && !targeting && (session.mode === 'run' || editTool === 'move')) {
+  if (occupant !== undefined && !targeting && (isOrderMode() || editTool === 'move')) {
     selectUnit(selectedId === occupant.id ? null : occupant.id);
   } else {
     applyAt(cell);
@@ -471,6 +478,8 @@ controls.run.addEventListener('click', () => {
   try { session = startExperiment(session); } catch (error) {
     setStatus(error instanceof Error ? error.message : '対戦の開始設定を確認してください。', true); render(); return;
   }
+  const unit = session.board.units.find((item) => item.id === selectedId);
+  if (unit !== undefined) cursor = { ...(unit.destination ?? unit.position) };
   editorTabs.select('unit');
   controls.width.value = String(session.board.width);
   controls.height.value = String(session.board.height);
@@ -495,9 +504,10 @@ controls.sizeForm.addEventListener('submit', (event) => {
 });
 controls.tools.forEach((button) => button.addEventListener('click', () => {
   mapPainting = false;
+  targeting = false;
   editTool = button.dataset.editTool as EditTool;
   const unit = session.board.units.find((item) => item.id === selectedId);
-  if (unit !== undefined) cursor = { ...unit.position };
+  if (unit !== undefined) cursor = { ...(isOrderMode() ? unit.destination ?? unit.position : unit.position) };
   setStatus(); render();
 }));
 function rememberCoordinates(): void {
@@ -559,7 +569,7 @@ controls.pickTarget.addEventListener('click', () => {
   render();
 });
 controls.clearOrder.addEventListener('click', () => {
-  if (selectedId !== null) perform({ type: 'order', unitId: selectedId, destination: null });
+  if (selectedId !== null) perform({ type: session.mode === 'edit' ? 'set-initial-order' : 'order', unitId: selectedId, destination: null });
 });
 controls.advance.addEventListener('click', () => { targeting = false; perform({ type: 'advance' }); });
 controls.undo.addEventListener('click', () => {
@@ -567,8 +577,9 @@ controls.undo.addEventListener('click', () => {
 });
 controls.reset.addEventListener('click', () => {
   session = resetExperiment(session);
-  selectedId = session.board.units[0]?.id ?? null;
-  cursor = { ...(session.board.units[0]?.position ?? { x: 0, y: 0 }) };
+  const unit = session.board.units[0];
+  selectedId = unit?.id ?? null;
+  cursor = { ...(unit === undefined ? { x: 0, y: 0 } : isOrderMode() ? unit.destination ?? unit.position : unit.position) };
   controls.width.value = String(session.board.width);
   controls.height.value = String(session.board.height);
   targeting = false; mapPainting = false; setStatus(); render();

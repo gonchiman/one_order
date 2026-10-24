@@ -63,6 +63,7 @@ export type BoardAction =
   | { type: 'set-wall'; position: Cell; blocked: boolean }
   | { type: 'set-goal'; side: UnitSide; position: Cell | null }
   | { type: 'set-match-rules'; matchEnabled?: boolean; firstPrioritySide?: UnitSide; turnLimit?: number }
+  | { type: 'set-initial-order'; unitId: number; destination: Cell | null }
   | { type: 'order'; unitId: number; destination: Cell | null }
   | { type: 'advance' };
 
@@ -407,6 +408,9 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
       || Object.values(state.goals).some((goal) => goal !== null && sameCell(goal, action.position)))) {
       return failure(state, 'ユニットや陣地のあるマスには壁を置けません。');
     }
+    if (action.blocked && state.units.some((unit) => unit.destination !== null && sameCell(unit.destination, action.position))) {
+      return failure(state, '目的地に設定されたマスには壁を置けません。');
+    }
     const walls = state.walls.filter((wall) => !sameCell(wall, action.position));
     if (action.blocked) walls.push({ ...action.position });
     return success({ ...state, walls });
@@ -518,7 +522,7 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
   if (action.destination !== null && isWall(state, action.destination)) return failure(state, '壁のあるマスは目的地にできません。');
   const alreadyOrdered = state.orderedUnitIds.includes(unit.id);
   const sideOrderCount = state.units.filter((item) => item.side === unit.side && state.orderedUnitIds.includes(item.id)).length;
-  if (!alreadyOrdered && sideOrderCount >= state.rules.orderLimit) {
+  if (action.type === 'order' && !alreadyOrdered && sideOrderCount >= state.rules.orderLimit) {
     return failure(state, 'このターンの指示枠を使い切りました。');
   }
   return success({
@@ -526,6 +530,6 @@ export function applyAction(state: BoardState, action: BoardAction): BoardResult
     units: state.units.map((item) => item.id === unit.id
       ? { ...item, destination: action.destination === null ? null : { ...action.destination } }
       : item),
-    orderedUnitIds: alreadyOrdered ? state.orderedUnitIds : [...state.orderedUnitIds, unit.id],
+    orderedUnitIds: action.type === 'set-initial-order' || alreadyOrdered ? state.orderedUnitIds : [...state.orderedUnitIds, unit.id],
   });
 }
