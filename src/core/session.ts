@@ -20,6 +20,10 @@ function startingBoard(board: BoardState): BoardState {
   return { ...structuredClone(board), turn: 0, orderedUnitIds: [], outcome: null };
 }
 
+export function isInitialOrderPhase(session: SandboxSession): boolean {
+  return session.mode === 'run' && session.board.turn === 0 && session.board.outcome === null;
+}
+
 export function createSession(board: BoardState = createBoard()): SandboxSession {
   const initialBoard = startingBoard(board);
   return {
@@ -99,7 +103,11 @@ export function actOnSession(
     return { session, error: '実験を開始してください。' };
   }
 
-  const result = applyAction(session.board, action);
+  const initialOrderPhase = isInitialOrderPhase(session);
+  const boardAction: BoardAction = initialOrderPhase && action.type === 'order'
+    ? { ...action, type: 'set-initial-order' }
+    : action;
+  const result = applyAction(session.board, boardAction);
   if (result.error !== null) return { session, error: result.error };
 
   if (action.type === 'advance') {
@@ -107,6 +115,7 @@ export function actOnSession(
       session: {
         ...session,
         board: result.state,
+        initialBoard: initialOrderPhase ? startingBoard(session.board) : session.initialBoard,
         events: structuredClone(result.events),
         combatEvents: structuredClone(result.combatEvents),
         history: [

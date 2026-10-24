@@ -6,6 +6,7 @@ import {
   actOnSession,
   createSession,
   editExperiment,
+  isInitialOrderPhase,
   resetExperiment,
   startExperiment,
   undoTurn,
@@ -107,39 +108,39 @@ describe('実験の開始配置', () => {
     const first = act(initial, { type: 'order', unitId: 1, destination: { x: 2, y: 4 } });
     const moved = act(first, { type: 'advance' });
     const reset = resetExperiment(moved);
-    expect(reset.board).toEqual(initial.board);
+    expect(reset.board).toEqual(first.board);
     expect(reset.mode).toBe('run');
     expect(reset.history).toEqual([]);
     expect(reset.events).toEqual([]);
     expect(reset.board.orderedUnitIds).toEqual([]);
 
     const alternative = act(reset, { type: 'order', unitId: 2, destination: { x: 2, y: 4 } });
-    expect(alternative.board.orderedUnitIds).toEqual([2]);
+    expect(alternative.board.orderedUnitIds).toEqual([]);
     const alternativeTurn = act(alternative, { type: 'advance' });
-    expect(alternativeTurn.board.units[0]?.position).toEqual({ x: 0, y: 3 });
+    expect(alternativeTurn.board.units[0]?.position).toEqual({ x: 1, y: 4 });
     expect(alternativeTurn.board.units[1]?.position).toEqual({ x: 3, y: 4 });
 
     reset.board.units[0]!.destination!.x = 3;
     reset.board.units[0]!.type = 'cavalry';
     reset.board.units[0]!.moveDistance = 4;
     reset.board.orderedUnitIds.push(2);
-    expect(resetExperiment(reset).board).toEqual(initial.board);
+    expect(resetExperiment(reset).board).toEqual(first.board);
   });
 });
 
 describe('ターンを戻す', () => {
   it('位置・目的地・ターン数・指示済みのユニットをそのターンの直前へ復元する', () => {
-    const started = startExperiment(createSession(withDestinations()));
+    const started = act(startExperiment(createSession(withDestinations())), { type: 'advance' });
     const ordered = act(started, { type: 'order', unitId: 1, destination: { x: 2, y: 4 } });
     const advanced = act(ordered, { type: 'advance' });
-    expect(advanced.board.turn).toBe(1);
+    expect(advanced.board.turn).toBe(2);
     expect(advanced.board.orderedUnitIds).toEqual([]);
     const restored = undoTurn(advanced);
     expect(restored.board).toEqual(ordered.board);
     expect(restored.events).toEqual(ordered.events);
     expect(restored.board.orderedUnitIds).toEqual([1]);
     expect(restored.board.units[0]?.destination).toEqual({ x: 2, y: 4 });
-    expect(restored.history).toEqual([]);
+    expect(restored.history).toHaveLength(1);
     expect(restored.initialBoard).toEqual(started.initialBoard);
     expect(actOnSession(restored, { type: 'order', unitId: 2, destination: { x: 3, y: 4 } }).error).not.toBeNull();
     expect(act(restored, { type: 'advance' }).board).toEqual(advanced.board);
@@ -243,7 +244,7 @@ describe('編集と実験の操作範囲', () => {
     expect(() => resetExperiment(advanced)).not.toThrow();
     expect(() => editExperiment(advanced)).not.toThrow();
     expect(editing).toEqual(before);
-    expect(ordered.board.orderedUnitIds).toEqual([1]);
+    expect(ordered.board.orderedUnitIds).toEqual([]);
     expect(advanced.history[0]?.board).toEqual(ordered.board);
   });
 });
@@ -275,12 +276,12 @@ describe('開始前の初期指示', () => {
     expect(act(cleared, { type: 'set-initial-order', unitId: 1, destination: { x: 3, y: 6 } }).board).toEqual(editing.board);
   });
 
-  it('開始時に初期指示を保存し、初回から各陣営の通常指示枠を使える', () => {
+  it('開始時に初期指示を保存し、初回移動後は各陣営の通常指示枠に戻る', () => {
     const editing = initiallyOrdered();
     const started = startExperiment(editing);
     expect(started.board).toEqual(editing.board);
     expect(started.initialBoard).toEqual(editing.board);
-    let running = act(started, { type: 'order', unitId: 1, destination: { x: 3, y: 5 } });
+    let running = act(act(started, { type: 'advance' }), { type: 'order', unitId: 1, destination: { x: 3, y: 5 } });
     running = act(running, { type: 'order', unitId: 1, destination: null });
     running = act(running, { type: 'order', unitId: 4, destination: { x: 3, y: 3 } });
     expect(running.board.orderedUnitIds).toEqual([1, 4]);
@@ -314,9 +315,9 @@ describe('開始前の初期指示', () => {
   });
 
   it('試合終了後の再戦で、試合中に解除した指示も初期指示へ戻す', () => {
-    const editing = act(initiallyOrdered(), { type: 'set-match-rules', turnLimit: 1 });
+    const editing = act(initiallyOrdered(), { type: 'set-match-rules', turnLimit: 2 });
     const started = startExperiment(editing);
-    const changed = act(started, { type: 'order', unitId: 1, destination: null });
+    const changed = act(act(started, { type: 'advance' }), { type: 'order', unitId: 1, destination: null });
     const ended = act(changed, { type: 'advance' });
     expect(ended.board.outcome).toEqual({ winner: null, reason: 'turn-limit' });
     expect(ended.board.units[0]?.destination).toBeNull();
@@ -339,6 +340,100 @@ describe('開始前の初期指示', () => {
     const restarted = startExperiment(changed);
     expect(restarted.initialBoard.units[1]?.destination).toEqual({ x: 4, y: 4 });
     expect(restarted.initialBoard.units.filter((unit) => unit.id !== 2).every((unit) => unit.destination === null)).toBe(true);
+  });
+});
+
+describe('対戦開始直後の初期指示', () => {
+  function openingOrders(session = startExperiment(createSession(createMatchScenario()))): SandboxSession {
+    let opening = session;
+    for (const unit of session.board.units) {
+      opening = act(freeze(opening), {
+        type: 'order', unitId: unit.id,
+        destination: { x: unit.position.x, y: unit.position.y + (unit.side === 'ally' ? -1 : 1) },
+      });
+    }
+    return opening;
+  }
+
+  it('開始直後は通常の指示操作で全員に設定・変更・解除でき、初回移動から実行する', () => {
+    const editing = createSession(createMatchScenario());
+    expect(isInitialOrderPhase(editing)).toBe(false);
+    const started = startExperiment(editing);
+    expect(isInitialOrderPhase(started)).toBe(true);
+    const ordered = openingOrders(started);
+    const cleared = act(ordered, { type: 'order', unitId: 1, destination: null });
+    expect(cleared.board.units[0]?.destination).toBeNull();
+    const ready = act(cleared, { type: 'order', unitId: 1, destination: { x: 3, y: 6 } });
+    expect(ready.board).toEqual(ordered.board);
+    expect(ready.board.orderedUnitIds).toEqual([]);
+    expect(ready.history).toEqual([]);
+    expect(ready.initialBoard).toEqual(started.board);
+    const moved = act(freeze(ready), { type: 'advance' });
+    expect(isInitialOrderPhase(moved)).toBe(false);
+    expect(moved.board.units.map((unit) => unit.position)).toEqual(ready.board.units.map((unit) => unit.destination));
+    expect(moved.initialBoard).toEqual(ready.board);
+    expect(moved.initialBoard.units.map((unit) => unit.position)).toEqual(started.board.units.map((unit) => unit.position));
+    expect(moved.initialBoard).not.toBe(ready.board);
+  });
+
+  it('通常ターンは指示上限を守り、undoで初回へ戻すと無制限に再設定して開始配置を更新できる', () => {
+    const opening = openingOrders();
+    const first = act(opening, { type: 'advance' });
+    const later = act(first, { type: 'order', unitId: 1, destination: null });
+    expect(later.board.orderedUnitIds).toEqual([1]);
+    expect(actOnSession(later, { type: 'order', unitId: 2, destination: null }).error).not.toBeNull();
+    expect(actOnSession(later, { type: 'set-initial-order', unitId: 2, destination: null }).error).not.toBeNull();
+    const second = act(later, { type: 'advance' });
+    expect(second.initialBoard).toEqual(opening.board);
+    const back = undoTurn(undoTurn(second));
+    expect(isInitialOrderPhase(back)).toBe(true);
+    expect(back.board).toEqual(opening.board);
+    let changed = back;
+    for (const unitId of [1, 2, 4, 5]) changed = act(changed, { type: 'order', unitId, destination: null });
+    expect(changed.board.orderedUnitIds).toEqual([]);
+    const replayed = act(freeze(changed), { type: 'advance' });
+    expect(replayed.initialBoard).toEqual(changed.board);
+    expect(resetExperiment(replayed).board).toEqual(changed.board);
+    expect(second.initialBoard).toEqual(opening.board);
+    const reset = resetExperiment(replayed);
+    reset.board.units[2]!.destination!.y = 0;
+    expect(replayed.initialBoard).toEqual(changed.board);
+    expect(replayed.history[0]?.board).toEqual(changed.board);
+  });
+
+  it('初回で終了しても開幕に選んだ全員の指示を保存し、再戦で再設定できる', () => {
+    const editing = act(createSession(createMatchScenario()), { type: 'set-match-rules', turnLimit: 1 });
+    const opening = openingOrders(startExperiment(editing));
+    const ended = act(opening, { type: 'advance' });
+    expect(ended.board.outcome).toEqual({ winner: null, reason: 'turn-limit' });
+    expect(isInitialOrderPhase(ended)).toBe(false);
+    const rematch = resetExperiment(freeze(ended));
+    expect(rematch.board).toEqual(opening.board);
+    expect(rematch.initialBoard).toEqual(opening.board);
+    expect(isInitialOrderPhase(rematch)).toBe(true);
+    expect(rematch.history).toEqual([]);
+    const changed = act(act(rematch, { type: 'order', unitId: 1, destination: null }), { type: 'order', unitId: 2, destination: null });
+    expect(changed.board.orderedUnitIds).toEqual([]);
+    expect(act(changed, { type: 'advance' }).initialBoard).toEqual(changed.board);
+  });
+
+  it('開幕中も不正な目的地・存在しないユニットを拒否し、状態や保存した初期配置を変更しない', () => {
+    const opening = freeze(openingOrders());
+    const invalidActions: BoardAction[] = [
+      { type: 'order', unitId: 1, destination: { x: -1, y: 0 } },
+      { type: 'order', unitId: 1, destination: { x: 3.5, y: 0 } },
+      { type: 'order', unitId: 1, destination: { x: Number.NaN, y: 0 } },
+      { type: 'order', unitId: 1, destination: { ...opening.board.walls[0]! } },
+      { type: 'order', unitId: 999, destination: null },
+    ];
+    for (const action of invalidActions) {
+      const rejected = actOnSession(opening, action);
+      expect(rejected.error).not.toBeNull();
+      expect(rejected.session).toBe(opening);
+      expect(isInitialOrderPhase(rejected.session)).toBe(true);
+      expect(rejected.session.board.orderedUnitIds).toEqual([]);
+      expect(rejected.session.history).toEqual([]);
+    }
   });
 });
 
@@ -381,7 +476,7 @@ describe('対戦の終了・復元・再戦', () => {
     const restored = undoTurn(freeze(ended));
     expect(restored.board).toEqual(ordered.board);
     expect(restored.board.outcome).toBeNull();
-    expect(restored.board.orderedUnitIds).toEqual([1]);
+    expect(restored.board.orderedUnitIds).toEqual([]);
     expect(prioritySideForTurn(restored.board)).toBe('enemy');
     expect(act(restored, { type: 'advance' })).toEqual(ended);
 
@@ -389,7 +484,7 @@ describe('対戦の終了・復元・再戦', () => {
     restored.board.goals.enemy!.x = 0;
     restored.board.units[0]!.movePriority = 9;
     expect(ended.history[0]?.board).toEqual(ordered.board);
-    expect(ended.initialBoard).toEqual(started.initialBoard);
+    expect(ended.initialBoard).toEqual(ordered.board);
   });
 
   it('終了後の再戦で開始配置のHP・拠点・地形・先行側を復元する', () => {
@@ -397,14 +492,14 @@ describe('対戦の終了・復元・再戦', () => {
     const ordered = act(started, { type: 'order', unitId: 1, destination: { x: 4, y: 0 } });
     const ended = act(ordered, { type: 'advance' });
     const reset = resetExperiment(freeze(ended));
-    expect(reset).toEqual(started);
+    expect(reset).toEqual({ ...ordered, initialBoard: ordered.board });
     expect(reset.board.outcome).toBeNull();
     expect(reset.board.units.every((unit) => unit.hp === unit.maxHp)).toBe(true);
     expect(prioritySideForTurn(reset.board)).toBe('enemy');
-    expect(act(reset, { type: 'advance' }).board.outcome).toBeNull();
+    expect(act(reset, { type: 'advance' }).board.outcome).toEqual({ winner: 'ally', reason: 'goal' });
     reset.board.walls[0]!.y = 0;
     reset.board.goals.ally!.x = 0;
-    expect(resetExperiment(reset)).toEqual(started);
+    expect(resetExperiment(reset)).toEqual({ ...ordered, initialBoard: ordered.board });
   });
 
   it('編集・新規セッション・再開は終了判定とターンを初期化する', () => {

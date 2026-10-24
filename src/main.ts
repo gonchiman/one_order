@@ -12,6 +12,7 @@ import {
   actOnSession,
   createSession,
   editExperiment,
+  isInitialOrderPhase,
   resetExperiment,
   startExperiment,
   undoTurn,
@@ -253,6 +254,7 @@ function render(): void {
   const { board, mode } = session;
   const editing = mode === 'edit';
   const ordering = isOrderMode();
+  const initialOrders = isInitialOrderPhase(session);
   const ended = board.outcome !== null;
   const adding = editing && editTool === 'add';
   const removing = editing && editTool === 'remove';
@@ -282,7 +284,8 @@ function render(): void {
     const used = units.filter((item) => board.orderedUnitIds.includes(item.id)).length;
     return editing ? `${UNIT_SIDES[side].name} ${units.length}体` : `${UNIT_SIDES[side].name} ${used}/${board.rules.orderLimit}`;
   }).join('・');
-  if (!editing) controls.orderCount.value = `指示 ${controls.orderCount.value}`;
+  if (initialOrders) controls.orderCount.value = '初期指示（無制限）';
+  else if (!editing) controls.orderCount.value = `指示 ${controls.orderCount.value}`;
   controls.editing.hidden = !editing;
   controls.tools.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.editTool === editTool)));
   controls.placementTypeField.hidden = !adding;
@@ -300,7 +303,7 @@ function render(): void {
   controls.undo.disabled = editing || session.history.length === 0;
   controls.pickTarget.disabled = unit === undefined || ended;
   controls.clearOrder.disabled = unit === undefined || ended;
-  controls.clearOrder.textContent = editing ? '初期指示を解除' : '指示を解除';
+  controls.clearOrder.textContent = editing || initialOrders ? '初期指示を解除' : '指示を解除';
   controls.pickTarget.textContent = targeting ? '指定を取り消す' : '目的地を指定';
   controls.pickTarget.setAttribute('aria-pressed', String(targeting));
   const unitValues = ['', ...board.units.map((item) => String(item.id))];
@@ -329,13 +332,13 @@ function render(): void {
   controls.destination.textContent = unit === undefined ? '—' : formatCell(unit.destination);
   const event = session.events.find((item) => item.unitId === selectedId);
   controls.lastAction.textContent = event === undefined ? '—' : eventLabels[event.reason];
-  controls.orderLimit.textContent = editing ? '無制限' : `${board.rules.orderLimit}体 / 陣営 / ターン`;
+  controls.orderLimit.textContent = editing || initialOrders ? '無制限' : `${board.rules.orderLimit}体 / 陣営 / ターン`;
   controls.x.max = String(board.width);
   controls.y.max = String(board.height);
   controls.x.value = String(cursor.x + 1);
   controls.y.value = String(cursor.y + 1);
-  controls.coordinateTitle.textContent = ordering ? editing ? '初期目的地' : '目的地' : removing ? '削除する位置' : '配置位置';
-  controls.apply.textContent = editing ? { move: 'ユニットを移動', order: '初期指示を設定', add: 'ユニットを追加', remove: 'ユニットを削除' }[editTool] : '目的地を指示';
+  controls.coordinateTitle.textContent = ordering ? editing || initialOrders ? '初期目的地' : '目的地' : removing ? '削除する位置' : '配置位置';
+  controls.apply.textContent = editing ? { move: 'ユニットを移動', order: '初期指示を設定', add: 'ユニットを追加', remove: 'ユニットを削除' }[editTool] : initialOrders ? '初期指示を設定' : '目的地を指示';
   controls.apply.disabled = ended || (unit === undefined && (ordering || editTool === 'move'));
   controls.x.disabled = ended;
   controls.y.disabled = ended;
