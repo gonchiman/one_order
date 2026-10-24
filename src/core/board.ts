@@ -65,6 +65,7 @@ export type BoardAction =
   | { type: 'set-match-rules'; matchEnabled?: boolean; firstPrioritySide?: UnitSide; turnLimit?: number }
   | { type: 'set-initial-order'; unitId: number; destination: Cell | null }
   | { type: 'order'; unitId: number; destination: Cell | null }
+  | { type: 'clear-orders' }
   | { type: 'advance' };
 
 export interface BoardResult {
@@ -387,10 +388,19 @@ function matchOutcome(state: BoardState): MatchOutcome | null {
 }
 
 export function applyAction(state: BoardState, action: BoardAction): BoardResult {
-  if (state.outcome !== null && (action.type === 'advance' || action.type === 'order')) {
+  if (state.outcome !== null && (action.type === 'advance' || action.type === 'order' || action.type === 'clear-orders')) {
     return failure(state, '試合は終了しています。');
   }
   if (action.type === 'advance') return advanceTurn(state);
+
+  if (action.type === 'clear-orders') {
+    if (state.orderedUnitIds.length === 0 && state.units.every((unit) => unit.destination === null)) return success(state);
+    return success({
+      ...state,
+      units: state.units.map((unit) => unit.destination === null ? unit : { ...unit, destination: null }),
+      orderedUnitIds: [],
+    });
+  }
 
   if (action.type === 'set-match-rules') {
     const rules = { ...state.rules };

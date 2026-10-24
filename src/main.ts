@@ -41,6 +41,7 @@ shell.content.innerHTML = `
       <div class="turn-actions">
         <button type="button" id="advance">1ターン進める</button>
         <button type="button" id="undo">1ターン戻す</button>
+        <button type="button" id="clear-orders">全指示をリセット</button>
         <button type="button" id="reset">開始配置に戻す</button>
       </div>
       <p id="status" role="status" aria-live="polite"></p>
@@ -142,6 +143,7 @@ const controls = {
   orderCount: element<HTMLOutputElement>('#order-count'),
   advance: element<HTMLButtonElement>('#advance'),
   undo: element<HTMLButtonElement>('#undo'),
+  clearOrders: element<HTMLButtonElement>('#clear-orders'),
   reset: element<HTMLButtonElement>('#reset'),
   status: element<HTMLParagraphElement>('#status'),
   editing: element<HTMLElement>('#editing-controls'),
@@ -301,6 +303,7 @@ function render(): void {
   controls.mapSize.value = `${board.width} × ${board.height}`;
   controls.advance.disabled = editing || ended;
   controls.undo.disabled = editing || session.history.length === 0;
+  controls.clearOrders.disabled = ended || (!board.units.some((item) => item.destination !== null) && board.orderedUnitIds.length === 0);
   controls.pickTarget.disabled = unit === undefined || ended;
   controls.clearOrder.disabled = unit === undefined || ended;
   controls.clearOrder.textContent = editing || initialOrders ? '初期指示を解除' : '指示を解除';
@@ -413,6 +416,12 @@ function perform(action: BoardAction): boolean {
     const attacks = session.combatEvents.length;
     const defeated = new Set(session.combatEvents.filter((event) => event.defeated).map((event) => event.targetId)).size;
     setStatus(`${moved}体移動${blocked > 0 ? `・${blocked}体停止` : ''}・${attacks}回攻撃${defeated > 0 ? `・${defeated}体撃破` : ''}`);
+  } else if (action.type === 'clear-orders') {
+    targeting = false;
+    mapPainting = false;
+    const unit = session.board.units.find((item) => item.id === selectedId);
+    if (unit !== undefined) cursor = { ...unit.position };
+    setStatus('全ユニットの指示をリセットしました。');
   } else if (action.type === 'order' || action.type === 'set-initial-order') {
     targeting = false;
     setStatus(`ユニット ${unitLabel(action.unitId)}：${action.destination === null ? '指示を解除' : `目的地 ${formatCell(action.destination)}`}`);
@@ -574,6 +583,7 @@ controls.pickTarget.addEventListener('click', () => {
 controls.clearOrder.addEventListener('click', () => {
   if (selectedId !== null) perform({ type: session.mode === 'edit' ? 'set-initial-order' : 'order', unitId: selectedId, destination: null });
 });
+controls.clearOrders.addEventListener('click', () => perform({ type: 'clear-orders' }));
 controls.advance.addEventListener('click', () => { targeting = false; perform({ type: 'advance' }); });
 controls.undo.addEventListener('click', () => {
   session = undoTurn(session); targeting = false; setStatus(); render();

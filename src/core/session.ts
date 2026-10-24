@@ -99,7 +99,7 @@ export function actOnSession(
   if (editing && session.mode !== 'edit') {
     return { session, error: '配置を変更するには「配置編集」に切り替えてください。' };
   }
-  if (!editing && session.mode !== 'run') {
+  if (!editing && session.mode !== 'run' && action.type !== 'clear-orders') {
     return { session, error: '実験を開始してください。' };
   }
 
