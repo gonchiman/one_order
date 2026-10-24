@@ -5,7 +5,7 @@ import { unitLabel } from '../../core/labels';
 import { UNIT_SIDES, UNIT_TYPES } from '../../core/unitTypes';
 
 const SIDE_COLORS = Object.freeze({ ally: 0x245a81, enemy: 0xa13737 });
-export const RANGE_COLORS = Object.freeze({ movement: 0xe1efdf, marker: 0x386638, attack: 0x8a6840 });
+export const RANGE_COLORS = Object.freeze({ movement: 0xe2ebf2, attack: 0x8a6840 });
 
 export interface BoardView {
   board: BoardState;
@@ -134,17 +134,9 @@ export class BoardScene extends Phaser.Scene {
     const selected = board.units.find((unit) => unit.id === selectedUnitId);
     const movementRange = selected === undefined ? [] : getMovementRange(board, selected.id);
     if (selected !== undefined) {
-      const markedCells = new Set([
-        ...Object.values(board.goals).filter((cell): cell is Cell => cell !== null),
-        ...board.units.map((unit) => unit.destination).filter((cell): cell is Cell => cell !== null),
-      ].map((cell) => `${cell.x},${cell.y}`));
       for (const cell of movementRange) {
         graphics.fillStyle(RANGE_COLORS.movement, 1);
         graphics.fillRect(x + cell.x * cellSize, y + cell.y * cellSize, cellSize, cellSize);
-        if (!markedCells.has(`${cell.x},${cell.y}`)) {
-          graphics.fillStyle(RANGE_COLORS.marker, 1);
-          graphics.fillCircle(x + (cell.x + 0.5) * cellSize, y + (cell.y + 0.5) * cellSize, Math.max(1, Math.min(2, cellSize * 0.05)));
-        }
       }
       graphics.lineStyle(1, RANGE_COLORS.attack, 1);
       for (let row = 0; row < board.height; row += 1) {

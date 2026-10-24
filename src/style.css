@@ -148,8 +148,7 @@ input {
 .range-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; max-width: 520px; margin: 8px auto 0; font-size: 12px; }
 .range-legend > span { display: inline-flex; align-items: center; gap: 6px; }
 .range-swatch { display: inline-block; width: 14px; height: 14px; flex: 0 0 auto; }
-.range-movement { position: relative; background: var(--range-movement); }
-.range-movement::after { content: ''; position: absolute; width: 4px; height: 4px; top: 5px; left: 5px; border-radius: 50%; background: var(--range-marker); }
+.range-movement { background: var(--range-movement); }
 .range-attack { border: 1px solid var(--range-attack); }
 .turn-actions { margin-top: 16px; }
 .match-result { border: 1px solid #888; padding: 12px; margin-top: 16px; }
