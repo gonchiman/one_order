@@ -229,13 +229,15 @@ function setStatus(message = '', error = false): void {
   isError = error;
 }
 
-function selectUnit(id: number, preserveTool = false): void {
+function selectUnit(id: number | null, preserveTool = false): void {
   const unit = session.board.units.find((item) => item.id === id);
-  if (unit === undefined) return;
+  if (id !== null && unit === undefined) return;
   selectedId = id;
   if (session.mode === 'edit' && !preserveTool) editTool = 'move';
   editorTabs.select('unit');
-  cursor = { ...(session.mode === 'run' ? unit.destination ?? unit.position : unit.position) };
+  if (unit !== undefined) {
+    cursor = { ...(session.mode === 'run' ? unit.destination ?? unit.position : unit.position) };
+  }
   targeting = false;
   mapPainting = false;
   setStatus();
@@ -248,7 +250,7 @@ function render(): void {
   const ended = board.outcome !== null;
   const adding = editing && editTool === 'add';
   const removing = editing && editTool === 'remove';
-  if (!board.units.some((unit) => unit.id === selectedId)) {
+  if (selectedId !== null && !board.units.some((unit) => unit.id === selectedId)) {
     const fallback = board.units[0];
     selectedId = fallback?.id ?? null;
     cursor = { ...(fallback === undefined ? { x: 0, y: 0 }
@@ -294,14 +296,13 @@ function render(): void {
   controls.clearOrder.disabled = unit === undefined || ended;
   controls.pickTarget.textContent = targeting ? '指定を取り消す' : '目的地を指定';
   controls.pickTarget.setAttribute('aria-pressed', String(targeting));
-  const unitValues = board.units.length === 0 ? [''] : board.units.map((item) => String(item.id));
+  const unitValues = ['', ...board.units.map((item) => String(item.id))];
   if (controls.selected.options.length !== unitValues.length || unitValues.some((value, index) => controls.selected.options[index]?.value !== value)) {
-    controls.selected.replaceChildren();
+    controls.selected.replaceChildren(new Option('選択なし', ''));
     for (const item of board.units) controls.selected.add(new Option(unitLabel(item.id), String(item.id)));
-    if (selectedId === null) controls.selected.add(new Option('ユニットなし', ''));
   }
   controls.selected.value = selectedId === null ? '' : String(selectedId);
-  controls.selected.disabled = unit === undefined;
+  controls.selected.disabled = board.units.length === 0;
   controls.selectedType.value = unit?.type ?? '';
   controls.selectedType.disabled = !editing || unit === undefined;
   controls.selectedSide.value = unit?.side ?? '';
@@ -355,7 +356,7 @@ function render(): void {
       select.type = 'button';
       select.textContent = unitLabel(item.id);
       select.setAttribute('aria-label', `ユニット ${unitLabel(item.id)} を選択`);
-      select.addEventListener('click', () => selectUnit(item.id));
+      select.addEventListener('click', () => selectUnit(selectedId === item.id ? null : item.id));
       row.insertCell().append(select);
       row.insertCell(); row.insertCell(); row.insertCell(); row.insertCell();
     }
@@ -447,7 +448,7 @@ function clickCell(cell: Cell): void {
   if (session.mode === 'edit' && mapPainting) { placeMapCell(cell); return; }
   const occupant = session.board.units.find((unit) => unit.position.x === cell.x && unit.position.y === cell.y);
   if (occupant !== undefined && !targeting && (session.mode === 'run' || editTool === 'move')) {
-    selectUnit(occupant.id);
+    selectUnit(selectedId === occupant.id ? null : occupant.id);
   } else {
     applyAt(cell);
   }
@@ -508,7 +509,7 @@ function rememberCoordinates(): void {
 }
 controls.x.addEventListener('input', rememberCoordinates);
 controls.y.addEventListener('input', rememberCoordinates);
-controls.selected.addEventListener('change', () => selectUnit(Number(controls.selected.value), true));
+controls.selected.addEventListener('change', () => selectUnit(controls.selected.value === '' ? null : Number(controls.selected.value), true));
 controls.selectedType.addEventListener('change', () => {
   if (selectedId !== null) perform({ type: 'set-type', unitId: selectedId, unitType: controls.selectedType.value as UnitType });
 });
